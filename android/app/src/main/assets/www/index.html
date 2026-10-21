@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0B1020">
+  <title>Magpie 监控</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">◆</span>
+      <div>
+        <div class="title">Magpie</div>
+        <div class="subtitle">网关监控</div>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button id="btn-refresh" class="icon-btn" type="button" aria-label="刷新">↻</button>
+      <button id="btn-settings" class="icon-btn" type="button" aria-label="设置">⚙</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="view-setup" class="view" hidden>
+      <h2>连接 Magpie</h2>
+      <p class="hint">首次使用需要填写网关地址和访问密钥。密钥只保存在这台手机，不会上传到任何地方。</p>
+
+      <label>网关地址
+        <input id="in-base" type="url" inputmode="url" autocomplete="off"
+               placeholder="https://magpie.example.invalid">
+      </label>
+
+      <label>访问密钥
+        <input id="in-key" type="password" autocomplete="off"
+               placeholder="粘贴 ?k= 后面的密钥">
+      </label>
+
+      <label>Cookie 名称（一般不用改）
+        <input id="in-cookie" type="text" autocomplete="off"
+               placeholder="magpie_web_3430">
+      </label>
+
+      <button id="btn-save" class="primary" type="button">保存并连接</button>
+      <button id="btn-reset" class="secondary" type="button">清除已保存的密钥</button>
+      <p id="setup-msg" class="msg"></p>
+    </section>
+
+    <section id="view-dash" class="view" hidden>
+      <div class="period-tabs" id="period-tabs">
+        <button class="tab active" type="button" data-period="today">今日</button>
+        <button class="tab" type="button" data-period="7d">7 天</button>
+        <button class="tab" type="button" data-period="30d">30 天</button>
+        <button class="tab" type="button" data-period="all">全部</button>
+      </div>
+
+      <div class="hero card">
+        <div class="hero-main">
+          <div class="big" id="k-calls">--</div>
+          <div class="muted">次调用</div>
+        </div>
+        <div class="hero-side">
+          <div class="stat"><span id="k-cost">$--</span><em>费用</em></div>
+          <div class="stat"><span id="k-errors">--</span><em>错误</em></div>
+          <div class="stat"><span id="k-retried">--</span><em>重试</em></div>
+        </div>
+      </div>
+
+      <div class="grid4">
+        <div class="mini card"><b id="k-input">--</b><span>输入 Token</span></div>
+        <div class="mini card"><b id="k-output">--</b><span>输出 Token</span></div>
+        <div class="mini card"><b id="k-cache">--</b><span>缓存读取</span></div>
+        <div class="mini card"><b id="k-reasoning">--</b><span>推理 Token</span></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>调用趋势</h3><span id="chart-note" class="muted"></span></div>
+        <canvas id="chart"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>额度与余额</h3><span id="quota-note" class="muted"></span></div>
+        <div id="quotas" class="list"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>模型用量</h3><span class="muted">按调用次数</span></div>
+        <div id="models" class="list"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>智能体</h3><span class="muted">按调用次数</span></div>
+        <div id="agents" class="list"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>实时路由</h3><span id="route-note" class="muted"></span></div>
+        <div id="routes" class="list"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>供应商</h3><span id="provider-note" class="muted"></span></div>
+        <div id="providers" class="list"></div>
+      </div>
+
+      <div class="footnote" id="footnote"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
