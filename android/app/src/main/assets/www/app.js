@@ -7,9 +7,10 @@
   var DEFAULT_BASE = "https://magpie.example.invalid";
   var DEFAULT_COOKIE = "magpie_web_3430";
 
+  /* Material Design 3 (Material You) Tonal Accent Palette */
   var PALETTE = [
-    "#7c3aed", "#0ea5e9", "#f43f5e", "#10b981", "#f59e0b",
-    "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16", "#6366f1"
+    "#d0bcff", "#78d9eb", "#f5b7d0", "#72f7be", "#ffdd80",
+    "#b388ff", "#4dd0e1", "#ff80ab", "#b9f6ca", "#ffd54f"
   ];
 
   var state = {
@@ -143,6 +144,68 @@
   function initialOf(s) {
     s = String(s || "?").trim();
     return s ? s.charAt(0).toUpperCase() : "?";
+  }
+
+  /* ---------- 平滑数字滚动过渡 (Count-Up Animation) ---------- */
+
+  function countUp(el, targetVal, formatFn, duration) {
+    if (!el) return;
+    targetVal = Number(targetVal) || 0;
+    var startVal = el._curVal != null ? el._curVal : 0;
+    if (Math.abs(startVal - targetVal) < 0.0001) {
+      el.textContent = formatFn(targetVal);
+      el._curVal = targetVal;
+      return;
+    }
+    if (el._animId) cancelAnimationFrame(el._animId);
+    duration = duration || 360;
+    var startTime = null;
+
+    function step(timestamp) {
+      if (!startTime) startTime = timestamp;
+      var progress = Math.min(1, (timestamp - startTime) / duration);
+      // easeOutCubic
+      var ease = 1 - Math.pow(1 - progress, 3);
+      var current = startVal + (targetVal - startVal) * ease;
+      el.textContent = formatFn(current);
+      if (progress < 1) {
+        el._animId = requestAnimationFrame(step);
+      } else {
+        el.textContent = formatFn(targetVal);
+        el._curVal = targetVal;
+        el._animId = null;
+      }
+    }
+    el._animId = requestAnimationFrame(step);
+  }
+
+  /* ---------- Material Ripple 触摸涟漪效果 ---------- */
+
+  function handleRipple(e) {
+    var target = e.target.closest
+      ? e.target.closest(".ripple, .icon-btn, .seg-item, .tab, .primary, .ghost, .back-btn, .route, .provider, .detail, .group, .q-more, .kpi")
+      : null;
+    if (!target) return;
+
+    var rect = target.getBoundingClientRect();
+    var circle = document.createElement("span");
+    var d = Math.max(rect.width, rect.height);
+    var clientX = e.clientX != null ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : rect.left + rect.width / 2);
+    var clientY = e.clientY != null ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : rect.top + rect.height / 2);
+    var x = clientX - rect.left - d / 2;
+    var y = clientY - rect.top - d / 2;
+
+    circle.className = "ripple-wave";
+    circle.style.width = circle.style.height = d + "px";
+    circle.style.left = x + "px";
+    circle.style.top = y + "px";
+
+    target.appendChild(circle);
+    setTimeout(function () {
+      if (circle.parentNode) {
+        circle.parentNode.removeChild(circle);
+      }
+    }, 500);
   }
 
   /* ---------- 配置 ---------- */
@@ -464,15 +527,16 @@
   function renderOverview() {
     var u = state.usage || {};
     $("hero-period").textContent = PERIOD_LABEL[state.period] || "今日";
-    $("k-cost").textContent = fmtMoney(u.cost);
-    $("k-calls").textContent = fmtInt(u.calls);
-    $("k-errors").textContent = fmtInt(u.errors);
-    $("k-retried").textContent = fmtInt(u.retried);
 
-    $("k-input").textContent = fmtCompact(u.input);
-    $("k-output").textContent = fmtCompact(u.output);
-    $("k-cache").textContent = fmtCompact(u.cache_read);
-    $("k-cache-write").textContent = fmtCompact(u.cache_write);
+    countUp($("k-cost"), u.cost, fmtMoney);
+    countUp($("k-calls"), u.calls, fmtInt);
+    countUp($("k-errors"), u.errors, fmtInt);
+    countUp($("k-retried"), u.retried, fmtInt);
+
+    countUp($("k-input"), u.input, fmtCompact);
+    countUp($("k-output"), u.output, fmtCompact);
+    countUp($("k-cache"), u.cache_read, fmtCompact);
+    countUp($("k-cache-write"), u.cache_write, fmtCompact);
     var ttft = u.timed ? u.ttft_ms / u.timed : 0;
     $("k-ttft").textContent = ttft ? fmtMs(ttft) : "--";
     var decode = u.decode_ms ? (Number(u.decode_out) || 0) / (u.decode_ms / 1000) : 0;
@@ -502,7 +566,11 @@
     var calls = Number(u.calls) || 0;
     var errors = Number(u.errors) || 0;
     var success = calls ? (calls - errors) / calls * 100 : 0;
-    $("q-success").textContent = calls ? success.toFixed(1) + "%" : "--";
+
+    countUp($("q-success"), calls ? success : 0, function (v) {
+      return calls ? v.toFixed(1) + "%" : "--";
+    });
+
     $("q-unpriced").textContent = u.unpriced ? fmtCompact(u.unpriced) + " 次" : "0";
     $("q-credits").textContent = u.credits ? fmtCompact(u.credits) : "—";
     $("q-avgcost").textContent = calls ? fmtMoney((Number(u.cost) || 0) / calls) : "—";
@@ -534,12 +602,12 @@
     var area = d + " L" + (W - pad) + "," + H + " L" + pad + "," + H + " Z";
     el.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
       '<defs><linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">' +
-      '<stop offset="0" stop-color="#c084fc" stop-opacity="0.42"/>' +
-      '<stop offset="1" stop-color="#c084fc" stop-opacity="0"/>' +
+      '<stop offset="0" stop-color="#d0bcff" stop-opacity="0.38"/>' +
+      '<stop offset="1" stop-color="#d0bcff" stop-opacity="0"/>' +
       "</linearGradient></defs>" +
-      '<path d="' + area + '" fill="url(#sparkFill)"/>' +
-      '<path d="' + d + '" fill="none" stroke="#d8b4fe" stroke-width="1.6" ' +
-      'stroke-linecap="round" stroke-linejoin="round"/>' +
+      '<path d="' + area + '" fill="url(#sparkFill)" class="chart-area-anim"/>' +
+      '<path d="' + d + '" fill="none" stroke="#d0bcff" stroke-width="2" ' +
+      'stroke-linecap="round" stroke-linejoin="round" class="chart-line-anim"/>' +
       "</svg>";
   }
 
@@ -592,7 +660,7 @@
     for (var g = 0; g < 4; g++) {
       var gy = padT + (H - padT - padB) * g / 3;
       grid += '<line x1="' + padL + '" y1="' + gy.toFixed(1) + '" x2="' + (W - padR) +
-        '" y2="' + gy.toFixed(1) + '" stroke="rgba(148,163,184,0.09)" stroke-width="1"/>';
+        '" y2="' + gy.toFixed(1) + '" stroke="rgba(202,196,208,0.08)" stroke-width="1"/>';
     }
 
     var line = "";
@@ -619,27 +687,27 @@
     var maxText = isCost ? fmtMoney(max) : fmtCompact(max);
 
     var gradId = isCost ? "areaCost" : "areaCalls";
-    var areaColor = isCost ? "#22d3ee" : "#8b5cf6";
-    var lineColor = isCost ? "#67e8f9" : "#c4b5fd";
+    var areaColor = isCost ? "#78d9eb" : "#d0bcff";
+    var lineColor = isCost ? "#78d9eb" : "#d0bcff";
 
     svg.setAttribute("viewBox", "0 0 " + W + " " + H);
     svg.innerHTML =
       "<defs>" +
         '<linearGradient id="' + gradId + '" x1="0" y1="0" x2="0" y2="1">' +
-          '<stop offset="0" stop-color="' + areaColor + '" stop-opacity="0.34"/>' +
+          '<stop offset="0" stop-color="' + areaColor + '" stop-opacity="0.36"/>' +
           '<stop offset="1" stop-color="' + areaColor + '" stop-opacity="0"/>' +
         "</linearGradient>" +
       "</defs>" +
       grid +
-      '<path d="' + area + '" fill="url(#' + gradId + ')"/>' +
-      '<path d="' + line + '" fill="none" stroke="' + lineColor + '" stroke-width="2.2" ' +
-        'stroke-linecap="round" stroke-linejoin="round"/>' +
+      '<path d="' + area + '" fill="url(#' + gradId + ')" class="chart-area-anim"/>' +
+      '<path d="' + line + '" fill="none" stroke="' + lineColor + '" stroke-width="2.4" ' +
+        'stroke-linecap="round" stroke-linejoin="round" class="chart-line-anim"/>' +
       '<circle cx="' + maxX.toFixed(1) + '" cy="' + maxY.toFixed(1) +
-        '" r="7" fill="' + areaColor + '" opacity="0.18"/>' +
+        '" r="8" fill="' + areaColor + '" opacity="0.2"/>' +
       '<circle cx="' + maxX.toFixed(1) + '" cy="' + maxY.toFixed(1) +
-        '" r="3.2" fill="' + lineColor + '" stroke="#070a14" stroke-width="1.6"/>' +
-      '<text x="' + Math.max(26, Math.min(W - 26, maxX)).toFixed(1) + '" y="' +
-        Math.max(12, maxY - 9) + '" fill="#cbd5e1" font-size="9.5" text-anchor="middle">' +
+        '" r="3.6" fill="' + lineColor + '" stroke="#141218" stroke-width="1.8"/>' +
+      '<text x="' + Math.max(28, Math.min(W - 28, maxX)).toFixed(1) + '" y="' +
+        Math.max(12, maxY - 10) + '" fill="#e6e0e9" font-size="10" font-weight="600" text-anchor="middle">' +
         esc(maxText) + "</text>" +
       labels;
 
@@ -722,9 +790,9 @@
     var t = state.trace;
     if (!t) return;
     var totals = t.totals || {};
-    $("r-requests").textContent = fmtCompact(totals.requests);
-    $("r-rerouted").textContent = fmtCompact(totals.rerouted);
-    $("r-errors").textContent = fmtCompact(totals.errors);
+    countUp($("r-requests"), totals.requests, fmtCompact);
+    countUp($("r-rerouted"), totals.rerouted, fmtCompact);
+    countUp($("r-errors"), totals.errors, fmtCompact);
 
     var box = $("routes");
     var routes = (t.routes || []).slice(-20).reverse();
@@ -1173,8 +1241,11 @@
 
     var ring = $("ring-fg");
     ring.style.strokeDashoffset = String(314 - 314 * health / 100);
-    ring.style.stroke = health >= 60 ? "#34d399" : health >= 30 ? "#fbbf24" : "#fb7185";
-    $("quota-health").textContent = Math.round(health) + "%";
+    ring.style.stroke = health >= 60 ? "#72f7be" : health >= 30 ? "#ffdd80" : "#ffb4ab";
+
+    countUp($("quota-health"), health, function (v) {
+      return Math.round(v) + "%";
+    });
     $("quota-summary").textContent = list.length + " 个供应商 · " +
       allRemain.length + " 个额度窗口" + (lowCount ? " · " + lowCount + " 项低于 30%" : " · 整体充足");
 
@@ -1371,6 +1442,8 @@
   }
 
   function bind() {
+    document.addEventListener("pointerdown", handleRipple, { passive: true });
+
     $("btn-refresh").addEventListener("click", function () {
       refreshAll(true);
     });
