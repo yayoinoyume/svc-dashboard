@@ -3,110 +3,283 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0B1020">
+  <meta name="theme-color" content="#070A14">
   <title>Magpie 监控</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <div class="aurora aurora-a"></div>
+  <div class="aurora aurora-b"></div>
+
   <header class="topbar">
     <div class="brand">
-      <span class="logo">◆</span>
-      <div>
-        <div class="title">Magpie</div>
-        <div class="subtitle">网关监控</div>
+      <div class="brand-mark">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 18V9m5 9V5m5 13v-7m5 7V7" />
+        </svg>
+      </div>
+      <div class="brand-text">
+        <div class="brand-name">MAGPIE</div>
+        <div class="brand-sub">网关监控</div>
       </div>
     </div>
     <div class="top-actions">
-      <button id="btn-refresh" class="icon-btn" type="button" aria-label="刷新">↻</button>
-      <button id="btn-settings" class="icon-btn" type="button" aria-label="设置">⚙</button>
+      <button id="btn-refresh" class="icon-btn" type="button" aria-label="刷新">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 11a8 8 0 1 0-.6 4M20 5v6h-6" />
+        </svg>
+      </button>
+      <button id="btn-settings" class="icon-btn" type="button" aria-label="设置">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+        </svg>
+      </button>
     </div>
   </header>
 
-  <main>
-    <section id="view-setup" class="view" hidden>
-      <h2>连接 Magpie</h2>
-      <p class="hint">首次使用需要填写网关地址和访问密钥。密钥只保存在这台手机，不会上传到任何地方。</p>
+  <main id="main">
+    <!-- ===== 概览 ===== -->
+    <section class="view active" id="view-overview">
+      <div class="seg" id="period-tabs">
+        <button class="seg-item active" type="button" data-period="today">今日</button>
+        <button class="seg-item" type="button" data-period="7d">7 天</button>
+        <button class="seg-item" type="button" data-period="30d">30 天</button>
+        <button class="seg-item" type="button" data-period="all">全部</button>
+      </div>
 
-      <label>网关地址
+      <div class="hero-card">
+        <div class="hero-head">
+          <span class="hero-label">本期费用</span>
+          <span class="hero-badge" id="hero-period">今日</span>
+        </div>
+        <div class="hero-value" id="k-cost">--</div>
+        <div class="hero-meta">
+          <span><b id="k-calls">--</b> 次调用</span>
+          <span class="dot-sep"></span>
+          <span><b id="k-errors">--</b> 错误</span>
+          <span class="dot-sep"></span>
+          <span><b id="k-retried">--</b> 重试</span>
+        </div>
+        <div class="hero-spark" id="hero-spark"></div>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi">
+          <span class="kpi-label">输入 Token</span>
+          <b class="kpi-value" id="k-input">--</b>
+          <span class="kpi-foot" id="k-input-foot">—</span>
+        </div>
+        <div class="kpi">
+          <span class="kpi-label">输出 Token</span>
+          <b class="kpi-value" id="k-output">--</b>
+          <span class="kpi-foot" id="k-output-foot">—</span>
+        </div>
+        <div class="kpi">
+          <span class="kpi-label">缓存命中</span>
+          <b class="kpi-value" id="k-cache">--</b>
+          <span class="kpi-foot" id="k-cache-foot">缓存读取</span>
+        </div>
+        <div class="kpi">
+          <span class="kpi-label">平均首字</span>
+          <b class="kpi-value" id="k-ttft">--</b>
+          <span class="kpi-foot">TTFT</span>
+        </div>
+      </div>
+
+      <div class="card chart-card">
+        <div class="card-head">
+          <div>
+            <h3>调用趋势</h3>
+            <p id="chart-sub">按小时统计</p>
+          </div>
+          <div class="mini-seg" id="metric-tabs">
+            <button class="active" type="button" data-metric="calls">调用</button>
+            <button type="button" data-metric="cost">费用</button>
+          </div>
+        </div>
+        <div class="chart-wrap" id="chart-wrap">
+          <svg id="trend" role="img" aria-label="调用趋势图"></svg>
+          <div class="chart-empty" id="chart-empty" hidden>暂无趋势数据</div>
+        </div>
+        <div class="chart-foot">
+          <span id="chart-peak">—</span>
+          <span id="chart-total">—</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h3>模型用量</h3>
+            <p>按调用次数排序</p>
+          </div>
+          <span class="card-note" id="model-count"></span>
+        </div>
+        <div class="rank-list" id="models"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h3>智能体</h3>
+            <p>谁在消耗网关</p>
+          </div>
+          <span class="card-note" id="agent-count"></span>
+        </div>
+        <div class="rank-list" id="agents"></div>
+      </div>
+
+      <div class="page-foot" id="footnote"></div>
+    </section>
+
+    <!-- ===== 路由 ===== -->
+    <section class="view" id="view-routing" hidden>
+      <div class="stat-strip">
+        <div class="stat-cell">
+          <b id="r-requests">--</b>
+          <span>总请求</span>
+        </div>
+        <div class="stat-cell">
+          <b id="r-rerouted">--</b>
+          <span>改道</span>
+        </div>
+        <div class="stat-cell">
+          <b id="r-errors">--</b>
+          <span>错误</span>
+        </div>
+      </div>
+
+      <div class="card route-card-wrap">
+        <div class="card-head">
+          <div>
+            <h3>实时请求</h3>
+            <p>最近的网关路由决策</p>
+          </div>
+          <span class="live"><i></i>实时</span>
+        </div>
+        <div class="route-list" id="routes"></div>
+      </div>
+
+      <div class="page-foot" id="route-foot"></div>
+    </section>
+
+    <!-- ===== 额度 ===== -->
+    <section class="view" id="view-quotas" hidden>
+      <div class="quota-hero card">
+        <div class="ring-wrap">
+          <svg class="ring" viewBox="0 0 120 120">
+            <circle class="ring-bg" cx="60" cy="60" r="50" />
+            <circle class="ring-fg" id="ring-fg" cx="60" cy="60" r="50" />
+          </svg>
+          <div class="ring-label">
+            <b id="quota-health">--</b>
+            <span>健康度</span>
+          </div>
+        </div>
+        <div class="quota-hero-text">
+          <h3>额度总览</h3>
+          <p id="quota-summary">正在读取配额…</p>
+          <div class="legend">
+            <span><i class="lg good"></i>充足</span>
+            <span><i class="lg warn"></i>偏低</span>
+            <span><i class="lg low"></i>告急</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="quota-list" id="quotas"></div>
+      <div class="page-foot" id="quota-foot"></div>
+    </section>
+
+    <!-- ===== 供应商 ===== -->
+    <section class="view" id="view-providers" hidden>
+      <div class="search-wrap">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.5-3.5" />
+        </svg>
+        <input id="provider-search" type="search" placeholder="搜索供应商或域名" autocomplete="off">
+      </div>
+      <div class="provider-list" id="providers"></div>
+      <div class="page-foot" id="provider-foot"></div>
+    </section>
+
+    <!-- ===== 设置 ===== -->
+    <section class="view setup-view" id="view-setup" hidden>
+      <button class="back-btn" id="btn-back" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+        返回
+      </button>
+
+      <h2>连接 Magpie</h2>
+      <p class="hint">密钥只保存在这台手机，不会上传到任何地方。</p>
+
+      <label>
+        网关地址
         <input id="in-base" type="url" inputmode="url" autocomplete="off"
                placeholder="https://magpie.example.invalid">
       </label>
 
-      <label>访问密钥
+      <label>
+        访问密钥
         <input id="in-key" type="password" autocomplete="off"
                placeholder="粘贴 ?k= 后面的密钥">
       </label>
 
-      <label>Cookie 名称（一般不用改）
+      <label>
+        Cookie 名称
         <input id="in-cookie" type="text" autocomplete="off"
                placeholder="magpie_web_3430">
       </label>
 
       <button id="btn-save" class="primary" type="button">保存并连接</button>
-      <button id="btn-reset" class="secondary" type="button">清除已保存的密钥</button>
+      <button id="btn-reset" class="ghost" type="button">清除已保存的密钥</button>
       <p id="setup-msg" class="msg"></p>
-    </section>
 
-    <section id="view-dash" class="view" hidden>
-      <div class="period-tabs" id="period-tabs">
-        <button class="tab active" type="button" data-period="today">今日</button>
-        <button class="tab" type="button" data-period="7d">7 天</button>
-        <button class="tab" type="button" data-period="30d">30 天</button>
-        <button class="tab" type="button" data-period="all">全部</button>
+      <div class="about">
+        <div>Magpie Monitor <span>v1.0</span></div>
+        <div>只读监控 · 每 20 秒刷新</div>
       </div>
-
-      <div class="hero card">
-        <div class="hero-main">
-          <div class="big" id="k-calls">--</div>
-          <div class="muted">次调用</div>
-        </div>
-        <div class="hero-side">
-          <div class="stat"><span id="k-cost">$--</span><em>费用</em></div>
-          <div class="stat"><span id="k-errors">--</span><em>错误</em></div>
-          <div class="stat"><span id="k-retried">--</span><em>重试</em></div>
-        </div>
-      </div>
-
-      <div class="grid4">
-        <div class="mini card"><b id="k-input">--</b><span>输入 Token</span></div>
-        <div class="mini card"><b id="k-output">--</b><span>输出 Token</span></div>
-        <div class="mini card"><b id="k-cache">--</b><span>缓存读取</span></div>
-        <div class="mini card"><b id="k-reasoning">--</b><span>推理 Token</span></div>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><h3>调用趋势</h3><span id="chart-note" class="muted"></span></div>
-        <canvas id="chart"></canvas>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><h3>额度与余额</h3><span id="quota-note" class="muted"></span></div>
-        <div id="quotas" class="list"></div>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><h3>模型用量</h3><span class="muted">按调用次数</span></div>
-        <div id="models" class="list"></div>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><h3>智能体</h3><span class="muted">按调用次数</span></div>
-        <div id="agents" class="list"></div>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><h3>实时路由</h3><span id="route-note" class="muted"></span></div>
-        <div id="routes" class="list"></div>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><h3>供应商</h3><span id="provider-note" class="muted"></span></div>
-        <div id="providers" class="list"></div>
-      </div>
-
-      <div class="footnote" id="footnote"></div>
     </section>
   </main>
+
+  <nav class="tabbar" id="tabbar">
+    <button class="tab active" type="button" data-view="overview">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3" y="3" width="7" height="7" rx="2" />
+        <rect x="14" y="3" width="7" height="7" rx="2" />
+        <rect x="3" y="14" width="7" height="7" rx="2" />
+        <rect x="14" y="14" width="7" height="7" rx="2" />
+      </svg>
+      <span>概览</span>
+    </button>
+    <button class="tab" type="button" data-view="routing">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="6" cy="6" r="2.5" />
+        <circle cx="18" cy="6" r="2.5" />
+        <circle cx="12" cy="18" r="2.5" />
+        <path d="M6 8.5v2a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3v-2M12 13.5v2" />
+      </svg>
+      <span>路由</span>
+    </button>
+    <button class="tab" type="button" data-view="quotas">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 18a8 8 0 1 1 16 0" />
+        <path d="m12 14 4-4" />
+        <circle cx="12" cy="14" r="1.6" />
+      </svg>
+      <span>额度</span>
+    </button>
+    <button class="tab" type="button" data-view="providers">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="6" rx="2" />
+        <rect x="3" y="14" width="18" height="6" rx="2" />
+        <path d="M7 7h.01M7 17h.01" />
+      </svg>
+      <span>供应商</span>
+    </button>
+  </nav>
 
   <div id="toast" class="toast"></div>
   <script src="/app.js"></script>
