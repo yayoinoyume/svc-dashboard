@@ -39,7 +39,8 @@
     liveOK: false,
     traceLoaded: false,
     seenSeq: {},
-    doneMap: {}
+    doneMap: {},
+    routeOrder: []
   };
 
   var openProviders = {};
@@ -151,6 +152,11 @@
   function countUp(el, targetVal, formatFn, duration) {
     if (!el) return;
     targetVal = Number(targetVal) || 0;
+    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      el.textContent = formatFn(targetVal);
+      el._curVal = targetVal;
+      return;
+    }
     var startVal = el._curVal != null ? el._curVal : 0;
     if (Math.abs(startVal - targetVal) < 0.0001) {
       el.textContent = formatFn(targetVal);
@@ -387,15 +393,17 @@
       (d.routes || []).forEach(function (r) {
         if (r) firstMap[rkey(r)] = r;
       });
+      var firstRoutes = sortRoutes(Object.keys(firstMap).map(function (k) {
+        return firstMap[k];
+      }));
       state.trace = {
         totals: d.totals || {},
         seq: d.seq || 0,
-        routes: sortRoutes(Object.keys(firstMap).map(function (k) {
-          return firstMap[k];
-        }))
+        routes: firstRoutes
       };
+      state.routeOrder = firstRoutes.map(rkey);
       state.traceLoaded = true;
-      state.trace.routes.forEach(function (r) {
+      firstRoutes.forEach(function (r) {
         var k = rkey(r);
         state.seenSeq[k] = true;
         state.doneMap[k] = !!r.done;
@@ -405,19 +413,31 @@
 
     // magpie 会把"同一请求的状态更新"作为新的 seq 再推一次，必须按 id 覆盖，
     // 否则同一个请求会以"进行中"和"完成"两条卡片重复出现。
+    // 同时保持首次出现顺序：状态更新原地刷新，不因新 seq 移动到列表其它位置，
+    // 避免实时刷新时用户正在展开/阅读的卡片跳动。
     var map = {};
     (state.trace.routes || []).forEach(function (r) {
       if (r) map[rkey(r)] = r;
     });
     (d.routes || []).forEach(function (r) {
-      if (r) map[rkey(r)] = r;
+      if (!r) return;
+      var k = rkey(r);
+      map[k] = r;
+      if (state.routeOrder.indexOf(k) < 0) state.routeOrder.push(k);
     });
-    var arr = sortRoutes(Object.keys(map).map(function (k) {
-      return map[k];
-    }));
+
+    state.routeOrder = state.routeOrder.filter(function (k) {
+      return !!map[k];
+    });
+    while (state.routeOrder.length > 80) {
+      delete map[state.routeOrder.shift()];
+    }
+
     state.trace = {
       totals: d.totals || state.trace.totals,
-      routes: arr.slice(-80),
+      routes: state.routeOrder.map(function (k) {
+        return map[k];
+      }).filter(Boolean),
       seq: d.seq || state.trace.seq
     };
   }
@@ -1029,15 +1049,15 @@
         };
       });
       if (!members.length) members = g.memberInfo || [];
-      var visible = open ? members : members.slice(0, 6);
+      var visible = open ? members : members.slice(0, 3);
       var chips = visible.map(function (m) {
         var label = m.provider ? (m.provider + "/" + (m.model || m.id)) : (m.name || m.id);
         var isOff = off.indexOf(m.id) >= 0;
         var cls = isOff ? "off" : (m.ready !== false ? "on" : "");
         return '<span class="model-chip ' + cls + '">' + esc(label) + "</span>";
       }).join("");
-      if (members.length > 6 && !open) {
-        chips += '<span class="model-chip">+' + (members.length - 6) + "</span>";
+      if (members.length > 3 && !open) {
+        chips += '<span class="model-chip">+' + (members.length - 3) + "</span>";
       }
       var meta = members.length + " 成员" +
         (off.length ? " · " + off.length + " 停用" : "") +

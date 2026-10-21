@@ -1238,8 +1238,8 @@ main {
 }
 
 .group:not(.open) .g-members {
-  max-height: 28px;
-  overflow: hidden;
+  /* 折叠时由 JS 控制只渲染前 3 个成员，这里不再用 max-height 截断，
+     避免长成员名把整行挤成只显示一个。 */
 }
 
 .section-label {
