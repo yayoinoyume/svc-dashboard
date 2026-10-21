@@ -153,7 +153,9 @@ public class MainActivity extends Activity {
             URL url = new URL(base + pathAndQuery);
             conn = (HttpURLConnection) url.openConnection();
             conn.setConnectTimeout(10000);
-            conn.setReadTimeout(20000);
+            // wait=1 是 magpie 的长轮询：无新事件时服务器会挂起连接，读超时必须放宽。
+            boolean longPoll = pathAndQuery.indexOf("wait=1") >= 0;
+            conn.setReadTimeout(longPoll ? 65000 : 20000);
             conn.setRequestMethod("GET");
             conn.setRequestProperty("Cookie", cookieName + "=" + key);
             conn.setRequestProperty("Accept", "application/json");

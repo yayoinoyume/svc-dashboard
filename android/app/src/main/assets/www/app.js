@@ -32,7 +32,13 @@
     loading: false,
     token: 0,
     timer: null,
-    lastOK: 0
+    lastOK: 0,
+    live: false,
+    liveTimer: null,
+    liveOK: false,
+    traceLoaded: false,
+    seenSeq: {},
+    doneMap: {}
   };
 
   var openProviders = {};
@@ -238,17 +244,21 @@
     });
     window.scrollTo(0, 0);
     if (name === "overview") {
+      stopLive();
       setTimeout(renderChart, 30);
     } else if (name === "routing") {
       renderRouting();
       renderGroups();
       if (!state.groups) loadGroups(false);
-    } else if (name === "details") {
-      renderDetails();
+      startLive();
+    } else {
+      stopLive();
+      if (name === "details") renderDetails();
     }
   }
 
   function openSetup(msg) {
+    stopLive();
     var c = readConfig();
     $("in-base").value = c.base || DEFAULT_BASE;
     $("in-cookie").value = c.cookie || DEFAULT_COOKIE;
@@ -288,7 +298,7 @@
       renderOverview();
       renderQuotas();
       renderDetails();
-      loadTrace(force);
+      if (state.view !== "routing") loadTrace(force);
       loadProviders(force);
       loadGroups(force);
       loadHistory(force);
@@ -298,34 +308,113 @@
     });
   }
 
+  function rkey(r) {
+    return r && r.id != null ? String(r.id) : String(r && r.seq);
+  }
+
+  function sortRoutes(routes) {
+    return routes.sort(function (a, b) {
+      return (Number(a.seq) || 0) - (Number(b.seq) || 0);
+    });
+  }
+
+  function mergeTrace(d, after) {
+    if (!after || !state.trace) {
+      var firstMap = {};
+      (d.routes || []).forEach(function (r) {
+        if (r) firstMap[rkey(r)] = r;
+      });
+      state.trace = {
+        totals: d.totals || {},
+        seq: d.seq || 0,
+        routes: sortRoutes(Object.keys(firstMap).map(function (k) {
+          return firstMap[k];
+        }))
+      };
+      state.traceLoaded = true;
+      state.trace.routes.forEach(function (r) {
+        var k = rkey(r);
+        state.seenSeq[k] = true;
+        state.doneMap[k] = !!r.done;
+      });
+      return;
+    }
+
+    // magpie 会把"同一请求的状态更新"作为新的 seq 再推一次，必须按 id 覆盖，
+    // 否则同一个请求会以"进行中"和"完成"两条卡片重复出现。
+    var map = {};
+    (state.trace.routes || []).forEach(function (r) {
+      if (r) map[rkey(r)] = r;
+    });
+    (d.routes || []).forEach(function (r) {
+      if (r) map[rkey(r)] = r;
+    });
+    var arr = sortRoutes(Object.keys(map).map(function (k) {
+      return map[k];
+    }));
+    state.trace = {
+      totals: d.totals || state.trace.totals,
+      routes: arr.slice(-80),
+      seq: d.seq || state.trace.seq
+    };
+  }
+
   function loadTrace(force) {
     var now = Date.now();
     if (!force && state.trace && now - state.traceAt < TRACE_MS) return;
 
     var after = state.trace && state.trace.seq ? state.trace.seq : 0;
     api("/api/gateway/trace?after=" + after).then(function (d) {
-      if (!after || !state.trace) {
-        state.trace = d;
-      } else {
-        var map = {};
-        (state.trace.routes || []).concat(d.routes || []).forEach(function (r) {
-          if (r && r.seq != null) map[r.seq] = r;
-        });
-        var arr = Object.keys(map).map(function (k) {
-          return map[k];
-        }).sort(function (a, b) {
-          return a.seq - b.seq;
-        });
-        state.trace = {
-          totals: d.totals || state.trace.totals,
-          routes: arr.slice(-80),
-          seq: d.seq || state.trace.seq
-        };
-      }
+      mergeTrace(d, after);
       state.traceAt = now;
       renderRouting();
     }).catch(function () {
       /* 次要数据，静默失败 */
+    });
+  }
+
+  function setLiveStatus(ok) {
+    state.liveOK = ok;
+    var el = $("live-status");
+    var txt = $("live-text");
+    if (!el || !txt) return;
+    txt.textContent = ok ? "实时" : "重连中";
+    el.classList.toggle("lost", !ok);
+  }
+
+  function startLive() {
+    stopLive();
+    state.live = true;
+    liveLoop();
+  }
+
+  function stopLive() {
+    state.live = false;
+    if (state.liveTimer) {
+      clearTimeout(state.liveTimer);
+      state.liveTimer = null;
+    }
+  }
+
+  function liveLoop() {
+    if (!state.live) return;
+    if (state.view !== "routing" || document.hidden) {
+      state.liveTimer = setTimeout(liveLoop, 1500);
+      return;
+    }
+
+    var after = state.trace && state.trace.seq ? state.trace.seq : 0;
+    var url = "/api/gateway/trace?after=" + after + (after ? "&wait=1" : "");
+    api(url).then(function (d) {
+      mergeTrace(d, after);
+      state.traceAt = Date.now();
+      setLiveStatus(true);
+      renderRouting();
+    }).catch(function () {
+      setLiveStatus(false);
+    }).then(function () {
+      if (!state.live) return;
+      state.liveTimer = setTimeout(liveLoop, state.liveOK ? 400 : 1500);
     });
   }
 
@@ -639,21 +728,45 @@
 
     var box = $("routes");
     var routes = (t.routes || []).slice(-20).reverse();
+    var running = routes.filter(function (r) {
+      return !r.done;
+    }).length;
+    var sub = $("route-live-sub");
+    if (sub) {
+      sub.textContent = running
+        ? "正在处理 " + running + " 个请求 · " + routes.length + " 条记录"
+        : "当前空闲 · 最近 " + routes.length + " 条记录";
+    }
+
     if (!routes.length) {
       box.innerHTML = '<div class="empty">暂无路由记录</div>';
+      $("route-foot").textContent = "";
       return;
     }
     box.innerHTML = routes.map(routeCard).join("");
-    $("route-foot").textContent = "显示最近 " + routes.length + " 条 · 每 20 秒刷新";
+    $("route-foot").textContent = "长轮询实时流 · 有事件立即更新";
+    tickElapsed();
   }
 
   function routeCard(r) {
-    var open = !!openRoutes[r.seq];
+    var key = rkey(r);
+    var open = !!openRoutes[key];
+    var isNew = state.traceLoaded && !state.seenSeq[key];
+    var wasDone = state.doneMap[key];
+    var justDone = !!r.done && wasDone === false;
+    state.seenSeq[key] = true;
+    state.doneMap[key] = !!r.done;
+
     var name = r.group && r.group.name
       ? r.group.name
       : String(r.model || "").replace(/^group\//, "");
     var tries = r.tries || [];
     var nodes = [];
+
+    if (r.agent) {
+      nodes.push('<span class="chain-node agent"><i></i>' + esc(r.agent) + "</span>");
+    }
+    nodes.push('<span class="chain-node hub"><i></i>magpie</span>');
 
     if (tries.length) {
       tries.forEach(function (tr, idx) {
@@ -670,13 +783,27 @@
     }
 
     var meta = [];
-    if (r.agent) meta.push(r.agent);
     var clock = fmtClock(r.time);
     if (clock) meta.push(clock);
     if (r.prompt && r.prompt.tokens) meta.push(fmtCompact(r.prompt.tokens) + " tokens");
     if (tries.length > 1) meta.push("尝试 " + tries.length + " 次");
+    if (r.effort) meta.push(r.effort);
 
-    return '<div class="route' + (open ? " open" : "") + '" data-seq="' + esc(r.seq) + '">' +
+    var elapsed = "";
+    if (!r.done && r.time) {
+      var started = new Date(r.time).getTime();
+      if (!isNaN(started)) {
+        elapsed = ' <span class="elapsed" data-start="' + started + '"></span>';
+      }
+    }
+
+    var cls = "route" +
+      (open ? " open" : "") +
+      (r.done ? " done" : " running") +
+      (isNew ? " new" : "") +
+      (justDone ? " just-done" : "");
+
+    return '<div class="' + cls + '" data-rid="' + esc(key) + '">' +
       '<div class="route-head">' +
         '<span class="route-model">' + esc(name || "未知模型") + "</span>" +
         '<span class="route-right">' +
@@ -686,9 +813,23 @@
         "</span>" +
       "</div>" +
       '<div class="chain">' + nodes.join('<span class="chain-arrow"></span>') + "</div>" +
-      '<div class="route-meta">' + esc(meta.join(" · ")) + "</div>" +
+      '<div class="route-meta">' + esc(meta.join(" · ")) + elapsed + "</div>" +
       (open ? routeDetail(r) : "") +
     "</div>";
+  }
+
+  function tickElapsed() {
+    var els = document.querySelectorAll(".elapsed");
+    if (!els.length) return;
+    var now = Date.now();
+    Array.prototype.forEach.call(els, function (el) {
+      var start = Number(el.getAttribute("data-start"));
+      if (!start) return;
+      var sec = Math.max(0, (now - start) / 1000);
+      el.textContent = sec < 60
+        ? sec.toFixed(1) + "s"
+        : Math.floor(sec / 60) + "m" + Math.floor(sec % 60) + "s";
+    });
   }
 
   var PART_LABEL = {
@@ -1339,9 +1480,9 @@
     $("routes").addEventListener("click", function (e) {
       var card = e.target.closest ? e.target.closest(".route") : null;
       if (!card) return;
-      var seq = card.getAttribute("data-seq");
-      if (!seq) return;
-      openRoutes[seq] = !openRoutes[seq];
+      var rid = card.getAttribute("data-rid");
+      if (!rid) return;
+      openRoutes[rid] = !openRoutes[rid];
       renderRouting();
     });
 
@@ -1386,8 +1527,10 @@
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) {
         stopTimer();
+        stopLive();
       } else {
         startTimer();
+        if (state.view === "routing") startLive();
         refreshAll(false);
       }
     });
@@ -1411,6 +1554,7 @@
   function init() {
     bind();
     renderSkeletons();
+    setInterval(tickElapsed, 250);
     var c = readConfig();
     if (!c.hasKey) {
       openSetup("");
