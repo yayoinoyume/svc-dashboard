@@ -16,12 +16,18 @@
     period: "today",
     metric: "calls",
     view: "overview",
+    detailTab: "sessions",
+    routingTab: "live",
     usage: null,
     quotas: null,
     trace: null,
     traceAt: 0,
     providers: null,
     providersAt: 0,
+    groups: null,
+    groupsAt: 0,
+    history: null,
+    historyAt: 0,
     providerQuery: "",
     loading: false,
     token: 0,
@@ -31,6 +37,9 @@
 
   var openProviders = {};
   var openQuotas = {};
+  var openRoutes = {};
+  var openGroups = {};
+  var openDetails = {};
   var bridge = window.Android || null;
 
   /* ---------- 基础工具 ---------- */
@@ -95,6 +104,25 @@
     if (h >= 24) return Math.floor(h / 24) + " 天 " + (h % 24) + " 小时";
     if (h > 0) return h + " 小时 " + Math.floor((ms % 3600000) / 60000) + " 分";
     return Math.max(1, Math.floor(ms / 60000)) + " 分钟";
+  }
+
+  function maskAccount(s) {
+    s = String(s || "");
+    var at = s.indexOf("@");
+    if (at > 0) {
+      var u = s.slice(0, at);
+      var d = s.slice(at + 1);
+      if (u.length <= 2) return u.charAt(0) + "***@" + d;
+      return u.slice(0, 2) + "***" + u.slice(-1) + "@" + d;
+    }
+    if (/^1\d{10}$/.test(s)) return s.slice(0, 3) + "****" + s.slice(-4);
+    if (s.length > 14) return s.slice(0, 6) + "…" + s.slice(-4);
+    return s;
+  }
+
+  function shortId(s) {
+    s = String(s || "");
+    return s.length > 12 ? s.slice(0, 8) + "…" + s.slice(-4) : s;
   }
 
   function colorFor(s) {
@@ -195,7 +223,8 @@
       overview: "view-overview",
       routing: "view-routing",
       quotas: "view-quotas",
-      providers: "view-providers"
+      providers: "view-providers",
+      details: "view-details"
     };
     Object.keys(map).forEach(function (k) {
       var el = $(map[k]);
@@ -210,6 +239,12 @@
     window.scrollTo(0, 0);
     if (name === "overview") {
       setTimeout(renderChart, 30);
+    } else if (name === "routing") {
+      renderRouting();
+      renderGroups();
+      if (!state.groups) loadGroups(false);
+    } else if (name === "details") {
+      renderDetails();
     }
   }
 
@@ -222,7 +257,7 @@
     $("setup-msg").textContent = msg || "";
     $("setup-msg").className = "msg";
 
-    ["view-overview", "view-routing", "view-quotas", "view-providers"].forEach(function (id) {
+    ["view-overview", "view-routing", "view-quotas", "view-providers", "view-details"].forEach(function (id) {
       $(id).hidden = true;
     });
     $("view-setup").hidden = false;
@@ -252,8 +287,11 @@
       state.lastOK = Date.now();
       renderOverview();
       renderQuotas();
+      renderDetails();
       loadTrace(force);
       loadProviders(force);
+      loadGroups(force);
+      loadHistory(force);
     }).catch(handleError).then(function () {
       state.loading = false;
       spin(false);
@@ -304,6 +342,32 @@
     });
   }
 
+  function loadGroups(force) {
+    var now = Date.now();
+    if (!force && state.groups && now - state.groupsAt < 60000) return;
+
+    api("/api/groups").then(function (d) {
+      state.groups = d;
+      state.groupsAt = now;
+      renderGroups();
+    }).catch(function () {
+      /* 次要数据，静默失败 */
+    });
+  }
+
+  function loadHistory(force) {
+    var now = Date.now();
+    if (!force && state.history && now - state.historyAt < 10 * 60 * 1000) return;
+
+    api("/api/gateway/history").then(function (d) {
+      state.history = d;
+      state.historyAt = now;
+      if (state.metric === "daily") renderChart();
+    }).catch(function () {
+      /* 次要数据，静默失败 */
+    });
+  }
+
   /* ---------- 概览 ---------- */
 
   var PERIOD_LABEL = { today: "今日", "7d": "7 天", "30d": "30 天", all: "全部" };
@@ -319,8 +383,11 @@
     $("k-input").textContent = fmtCompact(u.input);
     $("k-output").textContent = fmtCompact(u.output);
     $("k-cache").textContent = fmtCompact(u.cache_read);
+    $("k-cache-write").textContent = fmtCompact(u.cache_write);
     var ttft = u.timed ? u.ttft_ms / u.timed : 0;
     $("k-ttft").textContent = ttft ? fmtMs(ttft) : "--";
+    var decode = u.decode_ms ? (Number(u.decode_out) || 0) / (u.decode_ms / 1000) : 0;
+    $("k-decode").textContent = decode ? Math.round(decode) + " t/s" : "--";
 
     var totalIn = (Number(u.input) || 0) + (Number(u.cache_read) || 0);
     var hit = totalIn > 0 ? (Number(u.cache_read) || 0) / totalIn * 100 : 0;
@@ -330,6 +397,7 @@
       : "本期累计";
     $("k-cache-foot").textContent = "命中率 " + Math.round(hit) + "%";
 
+    renderQuality(u);
     renderSpark(u.series || []);
     renderChart();
     renderModels(u.models || []);
@@ -339,6 +407,16 @@
       $("footnote").textContent = "最后更新 " + fmtClock(new Date(state.lastOK).toISOString()) +
         " · 每 " + Math.round(REFRESH_MS / 1000) + " 秒自动刷新";
     }
+  }
+
+  function renderQuality(u) {
+    var calls = Number(u.calls) || 0;
+    var errors = Number(u.errors) || 0;
+    var success = calls ? (calls - errors) / calls * 100 : 0;
+    $("q-success").textContent = calls ? success.toFixed(1) + "%" : "--";
+    $("q-unpriced").textContent = u.unpriced ? fmtCompact(u.unpriced) + " 次" : "0";
+    $("q-credits").textContent = u.credits ? fmtCompact(u.credits) : "—";
+    $("q-avgcost").textContent = calls ? fmtMoney((Number(u.cost) || 0) / calls) : "—";
   }
 
   function renderSpark(series) {
@@ -377,7 +455,19 @@
   }
 
   function renderChart() {
-    var series = (state.usage && state.usage.series) || [];
+    var isDaily = state.metric === "daily";
+    var series;
+    if (isDaily) {
+      series = ((state.history && state.history.days) || []).map(function (d) {
+        return {
+          label: String(d.day || "").slice(5),
+          calls: Number(d.requests) || 0,
+          cost: 0
+        };
+      });
+    } else {
+      series = (state.usage && state.usage.series) || [];
+    }
     var svg = $("trend");
     var empty = $("chart-empty");
 
@@ -396,7 +486,7 @@
     var padR = 6;
     var padT = 22;
     var padB = 24;
-    var isCost = state.metric === "cost";
+    var isCost = state.metric === "cost" && !isDaily;
     var values = series.map(function (s) {
       return Number(isCost ? s.cost : s.calls) || 0;
     });
@@ -428,7 +518,8 @@
     for (var j = 0; j < n; j += step) {
       var lbl = series[j].label != null ? String(series[j].label) : "";
       if (lbl) {
-        labels += '<text x="' + xAt(j).toFixed(1) + '" y="' + (H - 6) +
+        var lx = Math.max(18, Math.min(W - 18, xAt(j)));
+        labels += '<text x="' + lx.toFixed(1) + '" y="' + (H - 6) +
           '" fill="#5d6a88" font-size="9" text-anchor="middle">' + esc(lbl) + "</text>";
       }
     }
@@ -468,7 +559,9 @@
     }, 0);
     $("chart-peak").textContent = "峰值 " + (isCost ? fmtMoney(max) : fmtCompact(max));
     $("chart-total").textContent = "合计 " + (isCost ? fmtMoney(total) : fmtInt(total) + " 次");
-    $("chart-sub").textContent = state.period === "today" ? "按小时统计" : "按天统计";
+    $("chart-sub").textContent = isDaily
+      ? "最近 " + series.length + " 天每日请求量"
+      : (state.period === "today" ? "按小时统计" : "按天统计");
   }
 
   function renderModels(models) {
@@ -555,6 +648,7 @@
   }
 
   function routeCard(r) {
+    var open = !!openRoutes[r.seq];
     var name = r.group && r.group.name
       ? r.group.name
       : String(r.model || "").replace(/^group\//, "");
@@ -582,15 +676,318 @@
     if (r.prompt && r.prompt.tokens) meta.push(fmtCompact(r.prompt.tokens) + " tokens");
     if (tries.length > 1) meta.push("尝试 " + tries.length + " 次");
 
-    return '<div class="route">' +
+    return '<div class="route' + (open ? " open" : "") + '" data-seq="' + esc(r.seq) + '">' +
       '<div class="route-head">' +
         '<span class="route-model">' + esc(name || "未知模型") + "</span>" +
-        '<span class="state ' + (r.done ? "done" : "live") + '">' +
-          (r.done ? "完成" : "进行中") + "</span>" +
+        '<span class="route-right">' +
+          '<span class="state ' + (r.done ? "done" : "live") + '">' +
+            (r.done ? "完成" : "进行中") + "</span>" +
+          '<span class="chev">' + (open ? "▴" : "▾") + "</span>" +
+        "</span>" +
       "</div>" +
       '<div class="chain">' + nodes.join('<span class="chain-arrow"></span>') + "</div>" +
       '<div class="route-meta">' + esc(meta.join(" · ")) + "</div>" +
+      (open ? routeDetail(r) : "") +
     "</div>";
+  }
+
+  var PART_LABEL = {
+    system: "系统",
+    tools: "工具",
+    memory: "记忆",
+    files: "文件",
+    messages: "消息",
+    history: "历史",
+    results: "结果",
+    chat: "对话",
+    user: "用户",
+    assistant: "助手",
+    tool_results: "工具结果",
+    context: "上下文"
+  };
+
+  function routeDetail(r) {
+    var html = "";
+
+    var order = r.order || [];
+    if (order.length) {
+      var rows = order.slice(0, 10).map(function (o) {
+        var pace = Math.round(clamp(o.pace, 0, 1) * 100);
+        var used = "—";
+        if (o.used != null && o.used !== "") {
+          var n = Number(o.used);
+          used = n >= 100 ? String(Math.round(n)) : (n >= 10 ? n.toFixed(1) : n.toFixed(2));
+        }
+        var label = o.name || o.id || "?";
+        if (o.model) label += " · " + o.model;
+        return '<div class="ord"><b>' + esc(label) + "</b>" +
+          "<span>已用 " + esc(used) + (pace ? " · 速度 " + pace + "%" : "") + "</span></div>";
+      }).join("");
+      html += '<div class="rd"><div class="rd-title">候选池 <span>' + order.length +
+        " 个</span></div><div class=\"rd-order\">" + rows + "</div></div>";
+    }
+
+    var aff = r.affinity;
+    if (aff && (aff.why || aff.kept || aff.cacheRead)) {
+      var WHY_LABEL = {
+        turn: "同一轮对话",
+        last: "上次使用",
+        cache: "缓存亲和",
+        affinity: "账号亲和",
+        sticky: "粘性会话"
+      };
+      var bits = [];
+      if (aff.kept) bits.push("保持缓存");
+      if (aff.why) bits.push(WHY_LABEL[aff.why] || String(aff.why));
+      if (aff.turn != null) bits.push("第 " + (Number(aff.turn) + 1) + " 轮");
+      if (aff.cacheRead) bits.push("缓存 " + fmtCompact(aff.cacheRead));
+      html += '<div class="rd"><div class="rd-title">亲和性</div>' +
+        '<div class="rd-line">' + esc(bits.join(" · ")) + "</div></div>";
+    }
+
+    var parts = (r.prompt && r.prompt.parts) || [];
+    if (parts.length) {
+      var total = Number(r.prompt.tokens) || parts.reduce(function (a, p) {
+        return a + (Number(p.tokens) || 0);
+      }, 0);
+      var maxp = Math.max.apply(null, parts.map(function (p) {
+        return Number(p.tokens) || 0;
+      }).concat([1]));
+      var partRows = parts.map(function (p) {
+        var t = Number(p.tokens) || 0;
+        var pct = total ? Math.round(t / total * 100) : 0;
+        var label = PART_LABEL[p.kind] || p.kind || "?";
+        return '<div class="part"><span>' + esc(label) + "</span>" +
+          "<b>" + fmtCompact(t) + "</b>" +
+          '<i style="width:' + Math.max(2, t / maxp * 100) + '%"></i>' +
+          "<em>" + pct + "%</em></div>";
+      }).join("");
+      html += '<div class="rd"><div class="rd-title">上下文构成 <span>' +
+        fmtCompact(total) + " tokens</span></div>" +
+        '<div class="rd-parts">' + partRows + "</div></div>";
+    }
+
+    var extra = [];
+    if (r.effort) extra.push("强度 " + r.effort);
+    if (r.cost) extra.push("费用 " + fmtMoney(r.cost));
+    if (r.priced === false) extra.push("未计价");
+    if (extra.length) {
+      html += '<div class="rd"><div class="rd-line muted">' +
+        esc(extra.join(" · ")) + "</div></div>";
+    }
+
+    return html
+      ? '<div class="route-detail">' + html + "</div>"
+      : '<div class="route-detail"><div class="empty">这条请求没有更多明细</div></div>';
+  }
+
+  /* ---------- 路由组 ---------- */
+
+  function renderGroups() {
+    var d = state.groups;
+    var box = $("groups");
+    if (!d) return;
+
+    var groups = d.groups || [];
+    var pools = d.pools || [];
+    var deciders = d.deciders || [];
+
+    $("g-count").textContent = groups.length;
+    $("g-pools").textContent = pools.length;
+    $("g-deciders").textContent = deciders.length;
+
+    if (!groups.length && !pools.length) {
+      box.innerHTML = '<div class="empty">暂无路由组数据</div>';
+      $("group-foot").textContent = "";
+      return;
+    }
+
+    var html = groups.map(function (g) {
+      var open = !!openGroups["g:" + g.id];
+      var infoMap = {};
+      (g.memberInfo || []).forEach(function (m) {
+        if (m && m.id) infoMap[m.id] = m;
+      });
+      var off = g.off || [];
+      var members = (g.members || []).map(function (mid) {
+        var info = infoMap[mid] || {};
+        return {
+          id: mid,
+          provider: info.provider,
+          model: info.model,
+          name: info.name || mid,
+          ready: info.ready !== false
+        };
+      });
+      if (!members.length) members = g.memberInfo || [];
+      var visible = open ? members : members.slice(0, 6);
+      var chips = visible.map(function (m) {
+        var label = m.provider ? (m.provider + "/" + (m.model || m.id)) : (m.name || m.id);
+        var isOff = off.indexOf(m.id) >= 0;
+        var cls = isOff ? "off" : (m.ready !== false ? "on" : "");
+        return '<span class="model-chip ' + cls + '">' + esc(label) + "</span>";
+      }).join("");
+      if (members.length > 6 && !open) {
+        chips += '<span class="model-chip">+' + (members.length - 6) + "</span>";
+      }
+      var meta = members.length + " 成员" +
+        (off.length ? " · " + off.length + " 停用" : "") +
+        (g.ready ? " · 就绪" : " · 未就绪");
+
+      return '<div class="group' + (open ? " open" : "") + '" data-gid="' + esc(g.id) + '">' +
+        '<div class="g-head">' +
+          '<div class="g-name">' + esc(g.name || g.id) + "</div>" +
+          '<span class="g-badge">' + esc(g.routing || "order") + "</span>" +
+        "</div>" +
+        '<div class="g-meta">' + esc(meta) + "</div>" +
+        '<div class="g-members">' + chips + "</div>" +
+      "</div>";
+    }).join("");
+
+    if (pools.length) {
+      html += '<div class="section-label">账号池</div>';
+      html += pools.map(function (p) {
+        var who = (p.who || []).map(maskAccount).join("、");
+        return '<div class="pool">' +
+          '<div class="g-head"><div class="g-name">' + esc(p.name || p.provider) + "</div>" +
+            '<span class="g-badge">' + esc(p.kind || "池") + "</span></div>" +
+          '<div class="g-meta">' + esc(who || "无成员") + "</div>" +
+        "</div>";
+      }).join("");
+    }
+
+    if (deciders.length) {
+      html += '<div class="section-label">决策器</div>';
+      html += deciders.map(function (x) {
+        return '<div class="pool">' +
+          '<div class="g-head"><div class="g-name">' + esc(x.name || x.id) + "</div></div>" +
+          '<div class="g-meta">' + esc(x.providerName || x.provider || "") + "</div>" +
+        "</div>";
+      }).join("");
+    }
+
+    box.innerHTML = html;
+    $("group-foot").textContent = "共 " + groups.length + " 个路由组 · " +
+      pools.length + " 个账号池 · " + deciders.length + " 个决策器";
+  }
+
+  /* ---------- 明细 ---------- */
+
+  function costLabel(r) {
+    var cost = Number(r.cost) || 0;
+    if (cost > 0) return fmtMoney(cost);
+    if (r.credits) return Number(r.credits).toFixed(1) + " 信用";
+    return "";
+  }
+
+  function renderDetails() {
+    var u = state.usage || {};
+    var tab = state.detailTab;
+    var rows = [];
+    var title = "";
+    var sub = "";
+    var prefix = "";
+
+    if (tab === "sessions") {
+      rows = u.sessions || [];
+      title = "会话用量";
+      sub = "按调用次数排序，点击查看明细";
+      prefix = "s";
+    } else if (tab === "accounts") {
+      rows = u.accounts || [];
+      title = "账号用量";
+      sub = "账号已打码，点击查看明细";
+      prefix = "a";
+    } else if (tab === "callers") {
+      rows = u.callerKeys || [];
+      title = "调用方用量";
+      sub = "按调用方密钥统计";
+      prefix = "c";
+    } else {
+      rows = u.providerKeys || [];
+      title = "供应商密钥";
+      sub = "按供应商密钥统计";
+      prefix = "k";
+    }
+
+    rows = rows.slice().sort(function (a, b) {
+      return (Number(b.calls) || 0) - (Number(a.calls) || 0);
+    });
+
+    $("detail-title").textContent = title;
+    $("detail-sub").textContent = sub;
+    $("detail-count").textContent = rows.length ? "共 " + rows.length + " 条" : "";
+
+    var box = $("detail-list");
+    if (!rows.length) {
+      box.innerHTML = '<div class="empty">暂无数据</div>';
+      $("detail-foot").textContent = "";
+      return;
+    }
+
+    var max = Number(rows[0].calls) || 1;
+    box.innerHTML = rows.map(function (r, i) {
+      var key = prefix + ":" + i;
+      var open = !!openDetails[key];
+      var name = "";
+      var line = "";
+
+      if (tab === "sessions") {
+        name = (r.agent || "未知") + " · #" + shortId(r.id);
+        line = [
+          costLabel(r),
+          fmtCompact((Number(r.input) || 0) + (Number(r.output) || 0)) + " tokens",
+          r.errors ? "错误 " + fmtInt(r.errors) : ""
+        ].filter(Boolean).join(" · ");
+      } else if (tab === "accounts") {
+        name = maskAccount(r.account || r.name || r.id);
+        line = [r.provider, costLabel(r)].filter(Boolean).join(" · ");
+      } else if (tab === "callers") {
+        name = r.name || r.callerKeyName || shortId(r.callerKeyId || r.id);
+        line = [
+          costLabel(r),
+          r.errors ? "错误 " + fmtInt(r.errors) : "",
+          r.unpriced ? "未计价 " + fmtInt(r.unpriced) : ""
+        ].filter(Boolean).join(" · ");
+      } else {
+        name = (r.provider || "?") + " · " + (r.providerKeyName || shortId(r.providerKeyId || r.id));
+        line = [costLabel(r), fmtInt(r.calls) + " 次"].filter(Boolean).join(" · ");
+      }
+
+      var pct = Math.max(3, (Number(r.calls) || 0) / max * 100);
+      return '<div class="detail' + (open ? " open" : "") + '" data-dkey="' + key + '">' +
+        '<div class="detail-head">' +
+          '<div class="detail-main">' +
+            '<div class="detail-name">' + esc(name) + "</div>" +
+            '<div class="detail-sub">' + esc(line) + "</div>" +
+            '<div class="rank-track"><i style="width:' + pct + '%"></i></div>' +
+          "</div>" +
+          '<div class="detail-right"><b>' + fmtCompact(r.calls) + "</b>" +
+            '<span class="chev">' + (open ? "▴" : "▾") + "</span></div>" +
+        "</div>" +
+        (open ? detailBody(r) : "") +
+      "</div>";
+    }).join("");
+
+    $("detail-foot").textContent = "数据来自 magpie 用量接口 · " + title;
+  }
+
+  function detailBody(r) {
+    var cells = [
+      ["输入", fmtCompact(r.input)],
+      ["输出", fmtCompact(r.output)],
+      ["缓存读", fmtCompact(r.cache_read)],
+      ["缓存写", fmtCompact(r.cache_write)],
+      ["推理", fmtCompact(r.reasoning)],
+      ["信用", r.credits ? Number(r.credits).toFixed(1) : "—"],
+      ["平均首字", r.timed ? fmtMs(r.ttft_ms / r.timed) : "—"],
+      ["解码", r.decode_ms ? Math.round((r.decode_out || 0) / (r.decode_ms / 1000)) + " t/s" : "—"],
+      ["未计价", fmtInt(r.unpriced)],
+      ["计时请求", fmtInt(r.timed)]
+    ];
+    return '<div class="detail-body">' + cells.map(function (c) {
+      return "<div><span>" + c[0] + "</span><b>" + c[1] + "</b></div>";
+    }).join("") + "</div>";
   }
 
   /* ---------- 额度 ---------- */
@@ -743,6 +1140,41 @@
       }
       if (!models.length) chips = '<span class="model-chip">暂无模型清单</span>';
 
+      var modelRows = models.slice(0, 8).map(function (m) {
+        var price = m.list || {};
+        var bits = [];
+        if (m.context) bits.push("上下文 " + fmtCompact(m.context));
+        if (m.output) bits.push("输出 " + fmtCompact(m.output));
+        if (price.input != null) bits.push("$" + price.input + " / $" + price.output);
+        if (m.efforts && m.efforts.length) bits.push(m.efforts.join("/"));
+        if (m.images) bits.push("图片");
+        return '<div class="mdl' + (m.on ? " on" : "") + '"><b>' +
+          esc(m.name || m.id) + "</b><span>" + esc(bits.join(" · ")) + "</span></div>";
+      }).join("");
+      if (models.length > 8) {
+        modelRows += '<div class="mdl-more">还有 ' + (models.length - 8) + " 个模型</div>";
+      }
+
+      var extras = [];
+      if (p.speaks && p.speaks.length) {
+        extras.push('<span class="model-chip">' + esc(p.speaks.join(" / ")) + "</span>");
+      }
+      if (p.keyList && p.keyList.length) {
+        extras.push('<span class="model-chip">密钥 ' + esc(p.keyList.map(function (k) {
+          return k.name || "key";
+        }).join("、")) + "</span>");
+      }
+      if (p.maxConcurrency) {
+        extras.push('<span class="model-chip">并发 ' + esc(p.maxConcurrency) + "</span>");
+      }
+      if (p.website) {
+        extras.push('<a class="model-chip link" href="' + esc(p.website) +
+          '" target="_blank" rel="noopener">官网</a>');
+      }
+      var extrasHtml = extras.length
+        ? '<div class="p-extra">' + extras.join("") + "</div>"
+        : "";
+
       return '<div class="provider' + (isOpen ? " open" : "") + '" data-pid="' + esc(p.id) + '">' +
         '<div class="p-main">' +
           '<span class="p-avatar" style="--c:' + colorFor(p.id || p.name) + '">' +
@@ -753,7 +1185,9 @@
           "</div>" +
           '<span class="p-state ' + stateCls + '"><i></i>' + stateTxt + "</span>" +
         "</div>" +
-        '<div class="p-models">' + chips + "</div>" +
+        '<div class="p-models">' + chips + extrasHtml +
+          (modelRows ? '<div class="mdl-list">' + modelRows + "</div>" : "") +
+        "</div>" +
       "</div>";
     }).join("");
 
@@ -868,8 +1302,63 @@
         });
         btn.classList.add("active");
         state.metric = btn.getAttribute("data-metric") || "calls";
+        if (state.metric === "daily") loadHistory(false);
         renderChart();
       });
+    });
+
+    var rtabs = $("routing-tabs").querySelectorAll(".seg-item");
+    Array.prototype.forEach.call(rtabs, function (btn) {
+      btn.addEventListener("click", function () {
+        Array.prototype.forEach.call(rtabs, function (b) {
+          b.classList.remove("active");
+        });
+        btn.classList.add("active");
+        state.routingTab = btn.getAttribute("data-rtab") || "live";
+        $("routing-live").hidden = state.routingTab !== "live";
+        $("routing-groups").hidden = state.routingTab !== "groups";
+        if (state.routingTab === "groups") {
+          renderGroups();
+          loadGroups(false);
+        }
+      });
+    });
+
+    var dtabs = $("detail-tabs").querySelectorAll(".seg-item");
+    Array.prototype.forEach.call(dtabs, function (btn) {
+      btn.addEventListener("click", function () {
+        Array.prototype.forEach.call(dtabs, function (b) {
+          b.classList.remove("active");
+        });
+        btn.classList.add("active");
+        state.detailTab = btn.getAttribute("data-dtab") || "sessions";
+        renderDetails();
+      });
+    });
+
+    $("routes").addEventListener("click", function (e) {
+      var card = e.target.closest ? e.target.closest(".route") : null;
+      if (!card) return;
+      var seq = card.getAttribute("data-seq");
+      if (!seq) return;
+      openRoutes[seq] = !openRoutes[seq];
+      renderRouting();
+    });
+
+    $("groups").addEventListener("click", function (e) {
+      var g = e.target.closest ? e.target.closest(".group") : null;
+      if (!g) return;
+      var gid = g.getAttribute("data-gid");
+      openGroups["g:" + gid] = !openGroups["g:" + gid];
+      renderGroups();
+    });
+
+    $("detail-list").addEventListener("click", function (e) {
+      var d = e.target.closest ? e.target.closest(".detail") : null;
+      if (!d) return;
+      var key = d.getAttribute("data-dkey");
+      openDetails[key] = !openDetails[key];
+      renderDetails();
     });
 
     $("provider-search").addEventListener("input", function () {
@@ -911,7 +1400,7 @@
   }
 
   function renderSkeletons() {
-    ["models", "agents", "routes", "quotas", "providers"].forEach(function (id) {
+    ["models", "agents", "routes", "quotas", "providers", "groups", "detail-list"].forEach(function (id) {
       var box = $(id);
       if (box) {
         box.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';

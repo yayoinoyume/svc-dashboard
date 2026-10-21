@@ -1148,6 +1148,27 @@ main {
   background: rgba(34, 211, 238, 0.05);
 }
 
+.model-chip.off {
+  color: #ffd6dc;
+  border-color: rgba(251, 113, 133, 0.2);
+  background: rgba(251, 113, 133, 0.05);
+}
+
+.p-extra {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.model-chip.link {
+  color: var(--violet-2);
+  text-decoration: none;
+  border-color: rgba(192, 132, 252, 0.24);
+  background: rgba(192, 132, 252, 0.05);
+}
+
 /* ---------- 设置 ---------- */
 
 .setup-view {
@@ -1373,4 +1394,356 @@ main {
 @keyframes shimmer {
   from { background-position: 200% 0; }
   to { background-position: -200% 0; }
+}
+
+/* ---------- 五页签导航 ---------- */
+
+.tabbar {
+  grid-template-columns: repeat(5, 1fr);
+}
+
+.tab {
+  font-size: 9.5px;
+}
+
+/* ---------- 概览质量指标 ---------- */
+
+.quality {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.quality > span {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.quality b {
+  color: var(--text);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.qd {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+/* ---------- 路由展开 ---------- */
+
+.route {
+  cursor: pointer;
+}
+
+.route-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.chev {
+  color: var(--dim);
+  font-size: 10px;
+}
+
+.route-detail {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rd-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+.rd-title span {
+  color: var(--dim);
+}
+
+.rd-order {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.ord {
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(148, 163, 184, 0.07);
+}
+
+.ord b {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ord span {
+  display: block;
+  font-size: 9.5px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rd-line {
+  font-size: 11px;
+  color: var(--text);
+}
+
+.rd-line.muted {
+  color: var(--muted);
+}
+
+.rd-parts {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.part {
+  display: grid;
+  grid-template-columns: 46px 46px 1fr 32px;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.part b {
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.part i {
+  display: block;
+  height: 4px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #6d28d9, #22d3ee);
+}
+
+.part em {
+  font-style: normal;
+  text-align: right;
+  color: var(--dim);
+}
+
+/* ---------- 路由组 ---------- */
+
+.group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.group,
+.pool {
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  padding: 13px 14px;
+}
+
+.group {
+  cursor: pointer;
+}
+
+.g-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.g-name {
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.g-badge {
+  flex: none;
+  font-size: 9.5px;
+  padding: 2px 7px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.g-meta {
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.g-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 9px;
+}
+
+.group:not(.open) .g-members {
+  max-height: 26px;
+  overflow: hidden;
+}
+
+.section-label {
+  font-size: 10.5px;
+  color: var(--dim);
+  letter-spacing: 0.6px;
+  margin: 16px 2px 8px;
+}
+
+/* ---------- 明细 ---------- */
+
+.detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.detail {
+  padding: 11px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.09);
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+}
+
+.detail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.detail-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.detail-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.detail-sub {
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+
+.detail-right {
+  flex: none;
+  text-align: right;
+}
+
+.detail-right b {
+  display: block;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.detail-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 12px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.12);
+}
+
+.detail-body div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.detail-body b {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 供应商模型详情 ---------- */
+
+.mdl-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.12);
+}
+
+.mdl {
+  min-width: 0;
+}
+
+.mdl b {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mdl span {
+  display: block;
+  font-size: 9.5px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mdl.on b {
+  color: #d8f7ff;
+}
+
+.mdl-more {
+  font-size: 9.5px;
+  color: var(--dim);
 }

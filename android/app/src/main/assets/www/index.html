@@ -61,6 +61,14 @@
           <span class="dot-sep"></span>
           <span><b id="k-retried">--</b> 重试</span>
         </div>
+
+        <div class="quality" id="quality">
+          <span><i class="qd good"></i>成功率 <b id="q-success">--</b></span>
+          <span>未计价 <b id="q-unpriced">--</b></span>
+          <span>信用 <b id="q-credits">--</b></span>
+          <span>每次 <b id="q-avgcost">--</b></span>
+        </div>
+
         <div class="hero-spark" id="hero-spark"></div>
       </div>
 
@@ -81,9 +89,19 @@
           <span class="kpi-foot" id="k-cache-foot">缓存读取</span>
         </div>
         <div class="kpi">
+          <span class="kpi-label">缓存写入</span>
+          <b class="kpi-value" id="k-cache-write">--</b>
+          <span class="kpi-foot">本期累计</span>
+        </div>
+        <div class="kpi">
           <span class="kpi-label">平均首字</span>
           <b class="kpi-value" id="k-ttft">--</b>
           <span class="kpi-foot">TTFT</span>
+        </div>
+        <div class="kpi">
+          <span class="kpi-label">解码速度</span>
+          <b class="kpi-value" id="k-decode">--</b>
+          <span class="kpi-foot">输出 Token / 秒</span>
         </div>
       </div>
 
@@ -96,6 +114,7 @@
           <div class="mini-seg" id="metric-tabs">
             <button class="active" type="button" data-metric="calls">调用</button>
             <button type="button" data-metric="cost">费用</button>
+            <button type="button" data-metric="daily">日请求</button>
           </div>
         </div>
         <div class="chart-wrap" id="chart-wrap">
@@ -135,33 +154,59 @@
 
     <!-- ===== 路由 ===== -->
     <section class="view" id="view-routing" hidden>
-      <div class="stat-strip">
-        <div class="stat-cell">
-          <b id="r-requests">--</b>
-          <span>总请求</span>
-        </div>
-        <div class="stat-cell">
-          <b id="r-rerouted">--</b>
-          <span>改道</span>
-        </div>
-        <div class="stat-cell">
-          <b id="r-errors">--</b>
-          <span>错误</span>
-        </div>
+      <div class="seg sub-seg" id="routing-tabs">
+        <button class="seg-item active" type="button" data-rtab="live">实时请求</button>
+        <button class="seg-item" type="button" data-rtab="groups">路由组</button>
       </div>
 
-      <div class="card route-card-wrap">
-        <div class="card-head">
-          <div>
-            <h3>实时请求</h3>
-            <p>最近的网关路由决策</p>
+      <div id="routing-live">
+        <div class="stat-strip">
+          <div class="stat-cell">
+            <b id="r-requests">--</b>
+            <span>总请求</span>
           </div>
-          <span class="live"><i></i>实时</span>
+          <div class="stat-cell">
+            <b id="r-rerouted">--</b>
+            <span>改道</span>
+          </div>
+          <div class="stat-cell">
+            <b id="r-errors">--</b>
+            <span>错误</span>
+          </div>
         </div>
-        <div class="route-list" id="routes"></div>
+
+        <div class="card route-card-wrap">
+          <div class="card-head">
+            <div>
+              <h3>实时请求</h3>
+              <p>点击展开候选池与上下文</p>
+            </div>
+            <span class="live"><i></i>实时</span>
+          </div>
+          <div class="route-list" id="routes"></div>
+        </div>
+
+        <div class="page-foot" id="route-foot"></div>
       </div>
 
-      <div class="page-foot" id="route-foot"></div>
+      <div id="routing-groups" hidden>
+        <div class="stat-strip">
+          <div class="stat-cell">
+            <b id="g-count">--</b>
+            <span>路由组</span>
+          </div>
+          <div class="stat-cell">
+            <b id="g-pools">--</b>
+            <span>账号池</span>
+          </div>
+          <div class="stat-cell">
+            <b id="g-deciders">--</b>
+            <span>决策器</span>
+          </div>
+        </div>
+        <div class="group-list" id="groups"></div>
+        <div class="page-foot" id="group-foot"></div>
+      </div>
     </section>
 
     <!-- ===== 额度 ===== -->
@@ -203,6 +248,27 @@
       </div>
       <div class="provider-list" id="providers"></div>
       <div class="page-foot" id="provider-foot"></div>
+    </section>
+
+    <!-- ===== 明细 ===== -->
+    <section class="view" id="view-details" hidden>
+      <div class="seg" id="detail-tabs">
+        <button class="seg-item active" type="button" data-dtab="sessions">会话</button>
+        <button class="seg-item" type="button" data-dtab="accounts">账号</button>
+        <button class="seg-item" type="button" data-dtab="callers">调用方</button>
+        <button class="seg-item" type="button" data-dtab="keys">密钥</button>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h3 id="detail-title">会话用量</h3>
+            <p id="detail-sub">按调用次数排序，点击查看明细</p>
+          </div>
+          <span class="card-note" id="detail-count"></span>
+        </div>
+        <div class="detail-list" id="detail-list"></div>
+      </div>
+      <div class="page-foot" id="detail-foot"></div>
     </section>
 
     <!-- ===== 设置 ===== -->
@@ -278,6 +344,13 @@
         <path d="M7 7h.01M7 17h.01" />
       </svg>
       <span>供应商</span>
+    </button>
+    <button class="tab" type="button" data-view="details">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 6h16M4 12h16M4 18h10" />
+        <circle cx="19" cy="18" r="2" />
+      </svg>
+      <span>明细</span>
     </button>
   </nav>
 
