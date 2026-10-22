@@ -207,14 +207,22 @@ class RankRow extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 5),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(99),
-                  child: LinearProgressIndicator(
-                    value: progress.clamp(0.0, 1.0),
-                    minHeight: 4,
-                    backgroundColor: AppColors.surfaceHigh,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      color ?? scheme.primary,
+                TweenAnimationBuilder<double>(
+                  tween: Tween<double>(
+                    begin: 0,
+                    end: progress.clamp(0.0, 1.0).toDouble(),
+                  ),
+                  duration: Duration(milliseconds: 420 + index * 55),
+                  curve: Curves.easeOutCubic,
+                  builder: (_, v, __) => ClipRRect(
+                    borderRadius: BorderRadius.circular(99),
+                    child: LinearProgressIndicator(
+                      value: v,
+                      minHeight: 4,
+                      backgroundColor: AppColors.surfaceHigh,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        color ?? scheme.primary,
+                      ),
                     ),
                   ),
                 ),
@@ -370,18 +378,26 @@ class TrendChart extends StatelessWidget {
         child: const EmptyHint('暂无趋势数据'),
       );
     }
-    return SizedBox(
-      height: height,
-      child: CustomPaint(
-        painter: _TrendPainter(
-          values: values,
-          labels: labels,
-          color: color,
-          textColor: AppColors.onSurfaceVariant,
-          gridColor: AppColors.outline,
-          money: money,
+    final signature = values.fold<double>(0, (a, b) => a + b) + values.length;
+    return TweenAnimationBuilder<double>(
+      key: ValueKey(signature.toStringAsFixed(2)),
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 680),
+      curve: Curves.easeOutCubic,
+      builder: (context, t, _) => SizedBox(
+        height: height,
+        child: CustomPaint(
+          painter: _TrendPainter(
+            values: values,
+            labels: labels,
+            color: color,
+            textColor: AppColors.onSurfaceVariant,
+            gridColor: AppColors.outline,
+            money: money,
+            progress: t,
+          ),
+          size: Size.infinite,
         ),
-        size: Size.infinite,
       ),
     );
   }
@@ -394,6 +410,7 @@ class _TrendPainter extends CustomPainter {
   final Color textColor;
   final Color gridColor;
   final bool money;
+  final double progress;
 
   _TrendPainter({
     required this.values,
@@ -402,6 +419,7 @@ class _TrendPainter extends CustomPainter {
     required this.textColor,
     required this.gridColor,
     required this.money,
+    required this.progress,
   });
 
   @override
@@ -446,6 +464,9 @@ class _TrendPainter extends CustomPainter {
       ..lineTo(xAt(0), h - padB)
       ..close();
 
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(0, 0, w * progress, h));
+
     final areaPaint = Paint()
       ..shader = LinearGradient(
         begin: Alignment.topCenter,
@@ -462,29 +483,38 @@ class _TrendPainter extends CustomPainter {
       ..strokeJoin = StrokeJoin.round;
     canvas.drawPath(linePath, linePaint);
 
+    canvas.restore();
+
     var maxIdx = 0;
     for (var i = 0; i < values.length; i++) {
       if (values[i] > values[maxIdx]) maxIdx = i;
     }
     final peak = Offset(xAt(maxIdx), yAt(values[maxIdx]));
-    canvas.drawCircle(
-      peak,
-      8,
-      Paint()..color = color.withValues(alpha: 0.16),
-    );
-    canvas.drawCircle(
-      peak,
-      3.2,
-      Paint()
-        ..color = color
-        ..style = PaintingStyle.fill,
-    );
+    final peakAlpha = ((progress - 0.55) / 0.45).clamp(0.0, 1.0).toDouble();
+    if (peakAlpha > 0) {
+      canvas.drawCircle(
+        peak,
+        8,
+        Paint()..color = color.withValues(alpha: 0.16 * peakAlpha),
+      );
+      canvas.drawCircle(
+        peak,
+        3.2,
+        Paint()
+          ..color = color.withValues(alpha: peakAlpha)
+          ..style = PaintingStyle.fill,
+      );
+    }
 
     final peakText = money ? fmtMoney(maxV) : fmtCompact(maxV);
     final tp = TextPainter(
       text: TextSpan(
         text: peakText,
-        style: TextStyle(color: textColor, fontSize: 10, fontWeight: FontWeight.w600),
+        style: TextStyle(
+          color: textColor.withValues(alpha: peakAlpha),
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+        ),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -512,7 +542,8 @@ class _TrendPainter extends CustomPainter {
   bool shouldRepaint(covariant _TrendPainter oldDelegate) {
     return oldDelegate.values != values ||
         oldDelegate.labels != labels ||
-        oldDelegate.color != color;
+        oldDelegate.color != color ||
+        oldDelegate.progress != progress;
   }
 }
 
@@ -540,33 +571,50 @@ class RingChart extends StatelessWidget {
       child: Stack(
         alignment: Alignment.center,
         children: [
-          CustomPaint(
-            size: Size(size, size),
-            painter: _RingPainter(
-              percent: percent.clamp(0, 100),
-              color: color,
-              bg: AppColors.surfaceHigh,
+          TweenAnimationBuilder<double>(
+            tween: Tween<double>(
+              begin: 0,
+              end: percent.clamp(0, 100).toDouble(),
+            ),
+            duration: const Duration(milliseconds: 760),
+            curve: Curves.easeOutCubic,
+            builder: (_, v, __) => CustomPaint(
+              size: Size(size, size),
+              painter: _RingPainter(
+                percent: v,
+                color: color,
+                bg: AppColors.surfaceHigh,
+              ),
             ),
           ),
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                center,
-                style: const TextStyle(
-                  fontSize: 23,
-                  fontWeight: FontWeight.w800,
-                  fontFeatures: [FontFeature.tabularFigures()],
+          TweenAnimationBuilder<double>(
+            tween: Tween<double>(begin: 0, end: 1),
+            duration: const Duration(milliseconds: 620),
+            curve: Curves.easeOut,
+            builder: (_, t, child) => Opacity(
+              opacity: t,
+              child: Transform.scale(scale: 0.92 + 0.08 * t, child: child),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  center,
+                  style: const TextStyle(
+                    fontSize: 23,
+                    fontWeight: FontWeight.w800,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
                 ),
-              ),
-              Text(
-                caption,
-                style: const TextStyle(
-                  fontSize: 10,
-                  color: AppColors.onSurfaceVariant,
+                Text(
+                  caption,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: AppColors.onSurfaceVariant,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),

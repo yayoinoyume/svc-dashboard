@@ -77,6 +77,33 @@ String _stateOf(Map<String, dynamic> r) {
   return 'ok';
 }
 
+int _outTokens(Map<String, dynamic> r) {
+  final usage = r['usage'];
+  if (usage is List && usage.isNotEmpty && usage.first is Map) {
+    final o = asInt((usage.first as Map)['out']);
+    if (o > 0) return o;
+  }
+  return asInt(r['out']);
+}
+
+/// 输出速度：输出 token / 流式时长（秒）。
+/// flow 缺失时退回 (总耗时 - 首字) 估算。
+double _tpsOf(Map<String, dynamic> r) {
+  final tries = (r['tries'] as List?) ?? const [];
+  if (tries.isEmpty || tries.last is! Map) return 0;
+  final t = tries.last as Map;
+  final out = _outTokens(r);
+  if (out <= 0) return 0;
+  var flow = asInt(t['flow']);
+  if (flow <= 0 && r['done'] == true) {
+    final ms = asInt(t['ms']);
+    final ttft = asInt(t['ttft']);
+    if (ms > ttft && ttft > 0) flow = ms - ttft;
+  }
+  if (flow <= 0) return 0;
+  return out / (flow / 1000);
+}
+
 int _msOf(Map<String, dynamic> r) {
   final tr = (r['tries'] as List?) ?? const [];
   if (tr.isEmpty) return 0;
@@ -572,6 +599,7 @@ class _RouteRow extends StatelessWidget {
     final ms = _msOf(r);
     final conv = (r['conv'] ?? r['folderShort'] ?? '').toString();
     final tokens = asInt((r['prompt'] is Map) ? r['prompt']['tokens'] : 0);
+    final tps = _tpsOf(r);
 
     return Container(
       decoration: BoxDecoration(
@@ -650,22 +678,27 @@ class _RouteRow extends StatelessWidget {
                         color: Color(0xFF6E778F),
                       ),
                     ),
-                    if (conv.isNotEmpty) ...[
-                      const SizedBox(width: 8),
-                      Text(
-                        '会话 $conv',
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text.rich(
+                        TextSpan(
+                          children: [
+                            if (conv.isNotEmpty)
+                              TextSpan(text: '会话 $conv   '),
+                            TextSpan(text: '${fmtCompact(tokens)} tok'),
+                            if (tps > 0)
+                              TextSpan(
+                                text: '   ${tps.round()} tokens/秒',
+                                style: const TextStyle(color: Color(0xFFB99BD1)),
+                              ),
+                          ],
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           fontSize: 9,
                           color: Color(0xFF6E778F),
                         ),
-                      ),
-                    ],
-                    const SizedBox(width: 8),
-                    Text(
-                      '${fmtCompact(tokens)} tok',
-                      style: const TextStyle(
-                        fontSize: 9,
-                        color: Color(0xFFCDB8E2),
                       ),
                     ),
                     if (tries.length > 1) ...[
@@ -699,11 +732,16 @@ class _RouteRow extends StatelessWidget {
     final chosen = tries.isNotEmpty && tries.first is Map
         ? (tries.first['id'] ?? '').toString()
         : '';
+    final t0 = tries.isNotEmpty && tries.last is Map ? tries.last as Map : null;
+    final ttft = t0 == null ? 0 : asInt(t0['ttft']);
+    final tps = _tpsOf(r);
 
     final meta = <(String, String)>[
       if (tries.isNotEmpty) ('尝试', '${tries.length} 次'),
       if ((r['effort'] ?? '').toString().isNotEmpty)
         ('思考', r['effort'].toString()),
+      if (ttft > 0) ('首字', fmtMs(ttft)),
+      if (tps > 0) ('速度', '${tps.round()} tokens/秒'),
       if (aff['turn'] != null) ('轮次', '第 ${asInt(aff['turn']) + 1} 轮'),
       if (asInt(aff['cacheRead']) > 0)
         ('缓存读取', fmtCompact(aff['cacheRead'])),

@@ -321,13 +321,21 @@ class _QuotasPageState extends State<QuotasPage> {
             ],
           ),
           const SizedBox(height: 5),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(99),
-            child: LinearProgressIndicator(
-              value: remain / 100,
-              minHeight: 4,
-              backgroundColor: AppColors.surfaceHigh,
-              valueColor: AlwaysStoppedAnimation<Color>(color),
+          TweenAnimationBuilder<double>(
+            tween: Tween<double>(
+              begin: 0,
+              end: (remain / 100).clamp(0.0, 1.0).toDouble(),
+            ),
+            duration: const Duration(milliseconds: 560),
+            curve: Curves.easeOutCubic,
+            builder: (_, v, __) => ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: LinearProgressIndicator(
+                value: v,
+                minHeight: 4,
+                backgroundColor: AppColors.surfaceHigh,
+                valueColor: AlwaysStoppedAnimation<Color>(color),
+              ),
             ),
           ),
           const SizedBox(height: 3),

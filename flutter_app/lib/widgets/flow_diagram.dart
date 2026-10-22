@@ -155,15 +155,26 @@ class _FlowDiagramState extends State<FlowDiagram>
     required double left,
   }) {
     final selected = widget.selectedKey == node.key;
-    return Positioned(
+    return AnimatedPositioned(
+      key: ValueKey('${isClient ? 'c' : 't'}:${node.key}'),
       left: left,
       top: cy - height / 2,
       width: width,
       height: height,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => widget.onTap(node, isClient),
-        child: AnimatedContainer(
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween<double>(begin: 0, end: 1),
+        duration: const Duration(milliseconds: 340),
+        curve: Curves.easeOutCubic,
+        builder: (_, t, child) => Opacity(
+          opacity: t,
+          child: Transform.scale(scale: 0.94 + 0.06 * t, child: child),
+        ),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => widget.onTap(node, isClient),
+          child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
           padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
           decoration: BoxDecoration(
@@ -180,15 +191,48 @@ class _FlowDiagramState extends State<FlowDiagram>
             children: [
               Row(
                 children: [
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: node.dot,
-                      shape: BoxShape.circle,
+                  SizedBox(
+                    width: 9,
+                    height: 9,
+                    child: Center(
+                      child: AnimatedBuilder(
+                        animation: _anim,
+                        builder: (_, __) {
+                          final pulse = node.live && !_reduced
+                              ? 1 +
+                                  0.45 *
+                                      (0.5 +
+                                          0.5 *
+                                              math.sin(_anim.value *
+                                                  2 *
+                                                  math.pi))
+                              : 1.0;
+                          return Transform.scale(
+                            scale: pulse,
+                            child: Container(
+                              width: 6,
+                              height: 6,
+                              decoration: BoxDecoration(
+                                color: node.dot,
+                                shape: BoxShape.circle,
+                                boxShadow: node.live
+                                    ? [
+                                        BoxShadow(
+                                          color: node.dot
+                                              .withValues(alpha: 0.38),
+                                          blurRadius: 5,
+                                          spreadRadius: 1,
+                                        ),
+                                      ]
+                                    : null,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 5),
+                  const SizedBox(width: 3),
                   Expanded(
                     child: Text(
                       node.label,
@@ -219,6 +263,7 @@ class _FlowDiagramState extends State<FlowDiagram>
             ],
           ),
         ),
+        ),
       ),
     );
   }
@@ -231,33 +276,41 @@ class _FlowDiagramState extends State<FlowDiagram>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF8E6CA8), Color(0xFF5E4574)],
-              ),
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.seed.withValues(alpha: 0.10),
-                  blurRadius: 0,
-                  spreadRadius: 6,
+          AnimatedBuilder(
+            animation: _anim,
+            builder: (_, __) {
+              final p = _reduced
+                  ? 0.5
+                  : 0.5 + 0.5 * math.sin(_anim.value * 2 * math.pi);
+              return Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFF8E6CA8), Color(0xFF5E4574)],
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.seed.withValues(alpha: 0.08 + 0.07 * p),
+                      blurRadius: 0,
+                      spreadRadius: 5 + 2.5 * p,
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            alignment: Alignment.center,
-            child: const Text(
-              'M',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
+                alignment: Alignment.center,
+                child: const Text(
+                  'M',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              );
+            },
           ),
           const SizedBox(height: 5),
           Container(
@@ -395,11 +448,24 @@ class _FlowPainter extends CustomPainter {
               : idle;
       final double width =
           1.0 + math.min(1.8, math.log(l.count + 1) / math.ln2 * 0.34);
+      final breathe =
+          l.live && animate ? 1 + 0.14 * math.sin(phase * 2 * math.pi) : 1.0;
+      final stroke = width * breathe;
+
+      if (l.live) {
+        final glowPaint = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = stroke + 4
+          ..color = live.withValues(alpha: 0.10);
+        canvas.drawPath(p1, glowPaint);
+        canvas.drawPath(p2, glowPaint);
+      }
 
       final paint = Paint()
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
-        ..strokeWidth = width
+        ..strokeWidth = stroke
         ..color = color;
 
       canvas.drawPath(p1, paint);
