@@ -329,7 +329,7 @@ class _Layout {
   }
 
   static (List<double>, double) _spread(int n, double h) {
-    if (n <= 0) return (<double>[], 0);
+    if (n <= 0) return (<double>[], 0.0);
     final nh = math.min(46.0, math.max(30.0, (h - (n + 1) * 10) / n));
     final gap = (h - n * nh) / (n + 1);
     return (
@@ -393,8 +393,8 @@ class _FlowPainter extends CustomPainter {
           : l.live
               ? live
               : idle;
-      final width =
-          1 + math.min(1.8, math.log(l.count + 1) / math.ln2 * 0.34);
+      final double width =
+          1.0 + math.min(1.8, math.log(l.count + 1) / math.ln2 * 0.34);
 
       final paint = Paint()
         ..style = PaintingStyle.stroke
@@ -412,8 +412,8 @@ class _FlowPainter extends CustomPainter {
           ..strokeWidth = 1.6
           ..color = glow;
         final offset = animate ? phase * 12 : 0.0;
-        canvas.drawPath(_dash(p1, 3, 9, offset), dash);
-        canvas.drawPath(_dash(p2, 3, 9, offset), dash);
+        canvas.drawPath(_dash(p1, 3.0, 9.0, offset), dash);
+        canvas.drawPath(_dash(p2, 3.0, 9.0, offset), dash);
       }
     }
   }
