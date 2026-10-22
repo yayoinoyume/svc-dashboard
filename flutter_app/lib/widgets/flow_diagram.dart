@@ -114,7 +114,8 @@ class _FlowDiagramState extends State<FlowDiagram>
                       clients: widget.clients,
                       targets: widget.targets,
                       links: widget.links,
-                      phase: _anim.value,
+                      // 量化到 30fps，避免每帧重绘整张图
+                      phase: (_anim.value * 30).round() / 30,
                       animate: !_reduced,
                     ),
                   ),

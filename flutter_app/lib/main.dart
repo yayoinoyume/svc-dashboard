@@ -29,12 +29,17 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
   int tab = 0;
   final PageController _pages = PageController();
 
+  /// 页面实例只创建一次。若每次 build 都新建 Widget，
+  /// PageView 里保活的页面会被全部 update → rebuild，切页就会卡。
+  late List<Widget> _pageViews = const [];
+
   @override
   void initState() {
     super.initState();
     config = widget.initialConfig;
     if (config.hasKey) {
       state = AppState(config);
+      _pageViews = _buildPages(state!);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         state?.refreshAll();
       });
@@ -69,12 +74,21 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
     setState(() {
       config = cfg;
       state = AppState(cfg);
+      _pageViews = _buildPages(state!);
       tab = 0;
     });
     old?.dispose();
     if (_pages.hasClients) _pages.jumpToPage(0);
     state?.refreshAll();
   }
+
+  List<Widget> _buildPages(AppState s) => [
+        OverviewPage(state: s),
+        RoutingPage(state: s),
+        QuotasPage(state: s),
+        ProvidersPage(state: s),
+        DetailsPage(state: s),
+      ];
 
   /// 必须用 MaterialApp 内部的 context 才能拿到 Navigator；
   /// 直接用 State.context 会找不到 Navigator，点击没有任何反应。
@@ -183,11 +197,13 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
         controller: _pages,
         physics: const NeverScrollableScrollPhysics(),
         children: [
-          _KeepAlive(child: OverviewPage(state: s)),
-          _KeepAlive(child: RoutingPage(state: s)),
-          _KeepAlive(child: QuotasPage(state: s)),
-          _KeepAlive(child: ProvidersPage(state: s)),
-          _KeepAlive(child: DetailsPage(state: s)),
+          for (var i = 0; i < _pageViews.length; i++)
+            TickerMode(
+              // 离屏页面必须静音 Ticker，否则流向图等循环动画
+              // 会在后台持续重绘，拖慢所有页面的切换。
+              enabled: tab == i,
+              child: _KeepAlive(child: _pageViews[i]),
+            ),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -197,7 +213,7 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
           if (_pages.hasClients) {
             _pages.animateToPage(
               i,
-              duration: const Duration(milliseconds: 360),
+              duration: const Duration(milliseconds: 260),
               curve: Curves.easeOutCubic,
             );
           }
