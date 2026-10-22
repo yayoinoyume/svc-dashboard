@@ -13,9 +13,9 @@ class OverviewPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: state,
-      builder: (context, _) {
+    return ValueListenableBuilder<int>(
+      valueListenable: state.usageRev,
+      builder: (context, _, __) {
         final u = state.usage ?? <String, dynamic>{};
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),

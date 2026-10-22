@@ -78,6 +78,13 @@ class AppState extends ChangeNotifier {
   DateTime? lastOk;
   DateTime? lastTraceOk;
 
+  /// 细粒度刷新信号：各页面只监听自己需要的那一份，
+  /// 避免任一数据变化时五页同时重建。
+  final usageRev = ValueNotifier<int>(0);
+  final traceRev = ValueNotifier<int>(0);
+  final quotasRev = ValueNotifier<int>(0);
+  final providersRev = ValueNotifier<int>(0);
+
   DateTime? _providersAt;
   DateTime? _groupsAt;
   DateTime? _historyAt;
@@ -96,6 +103,8 @@ class AppState extends ChangeNotifier {
       quotas = results[1] as List<dynamic>;
       lastOk = DateTime.now();
       error = null;
+      usageRev.value++;
+      quotasRev.value++;
     } catch (e) {
       error = e.toString();
     } finally {
@@ -113,6 +122,7 @@ class AppState extends ChangeNotifier {
       usage = await api.getJson('/api/usage?period=$period');
       lastOk = DateTime.now();
       error = null;
+      usageRev.value++;
     } catch (e) {
       error = e.toString();
     }
@@ -140,6 +150,7 @@ class AppState extends ChangeNotifier {
     try {
       providers = await api.getJson('/api/providers');
       _providersAt = now;
+      providersRev.value++;
       notifyListeners();
     } catch (_) {}
   }
@@ -224,6 +235,7 @@ class AppState extends ChangeNotifier {
             .toList(),
       };
     }
+    traceRev.value++;
     notifyListeners();
   }
 
@@ -284,6 +296,10 @@ class AppState extends ChangeNotifier {
     history = null;
     routeOrder = [];
     error = null;
+    usageRev.value++;
+    traceRev.value++;
+    quotasRev.value++;
+    providersRev.value++;
     notifyListeners();
   }
 
@@ -291,6 +307,10 @@ class AppState extends ChangeNotifier {
   void dispose() {
     _liveRunning = false;
     api.close();
+    usageRev.dispose();
+    traceRev.dispose();
+    quotasRev.dispose();
+    providersRev.dispose();
     super.dispose();
   }
 }

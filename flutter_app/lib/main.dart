@@ -27,6 +27,7 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
   late AppConfig config;
   AppState? state;
   int tab = 0;
+  final PageController _pages = PageController();
 
   @override
   void initState() {
@@ -44,6 +45,7 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _pages.dispose();
     state?.dispose();
     super.dispose();
   }
@@ -70,6 +72,7 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
       tab = 0;
     });
     old?.dispose();
+    if (_pages.hasClients) _pages.jumpToPage(0);
     state?.refreshAll();
   }
 
@@ -174,20 +177,22 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
           const SizedBox(width: 4),
         ],
       ),
-      body: IndexedStack(
-        index: tab,
+      body: PageView(
+        controller: _pages,
+        physics: const NeverScrollableScrollPhysics(),
         children: [
-          OverviewPage(state: s),
-          RoutingPage(state: s),
-          QuotasPage(state: s),
-          ProvidersPage(state: s),
-          DetailsPage(state: s),
+          _KeepAlive(child: OverviewPage(state: s)),
+          _KeepAlive(child: RoutingPage(state: s)),
+          _KeepAlive(child: QuotasPage(state: s)),
+          _KeepAlive(child: ProvidersPage(state: s)),
+          _KeepAlive(child: DetailsPage(state: s)),
         ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: tab,
         onDestinationSelected: (i) {
           setState(() => tab = i);
+          _pages.jumpToPage(i);
           if (i == 1) {
             s.startLive();
           } else {
@@ -218,5 +223,26 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
         ],
       ),
     );
+  }
+}
+
+/// 让 PageView 里的页面在切走后保留状态，但首次进入前不构建。
+class _KeepAlive extends StatefulWidget {
+  final Widget child;
+  const _KeepAlive({required this.child});
+
+  @override
+  State<_KeepAlive> createState() => _KeepAliveState();
+}
+
+class _KeepAliveState extends State<_KeepAlive>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
   }
 }

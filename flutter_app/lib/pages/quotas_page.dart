@@ -42,9 +42,9 @@ class _QuotasPageState extends State<QuotasPage> {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: widget.state,
-      builder: (context, _) {
+    return ValueListenableBuilder<int>(
+      valueListenable: widget.state.quotasRev,
+      builder: (context, _, __) {
         final list = asMapList(widget.state.quotas)
             .where((q) => (q['windows'] as List?)?.isNotEmpty == true)
             .toList();

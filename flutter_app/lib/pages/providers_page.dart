@@ -25,9 +25,9 @@ class _ProvidersPageState extends State<ProvidersPage> {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: widget.state,
-      builder: (context, _) {
+    return ValueListenableBuilder<int>(
+      valueListenable: widget.state.providersRev,
+      builder: (context, _, __) {
         final data = widget.state.providers;
         if (data == null) {
           return const Center(child: EmptyHint('正在加载供应商…'));

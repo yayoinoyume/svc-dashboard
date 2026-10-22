@@ -21,9 +21,9 @@ class _DetailsPageState extends State<DetailsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: widget.state,
-      builder: (context, _) {
+    return ValueListenableBuilder<int>(
+      valueListenable: widget.state.usageRev,
+      builder: (context, _, __) {
         final u = widget.state.usage ?? <String, dynamic>{};
         final rows = _rows(u);
 
