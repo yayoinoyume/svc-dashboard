@@ -192,7 +192,7 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
         selectedIndex: tab,
         onDestinationSelected: (i) {
           setState(() => tab = i);
-          _pages.jumpToPage(i);
+          if (_pages.hasClients) _pages.jumpToPage(i);
           if (i == 1) {
             s.startLive();
           } else {

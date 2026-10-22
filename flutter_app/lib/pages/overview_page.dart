@@ -270,7 +270,9 @@ class OverviewPage extends StatelessWidget {
           TrendChart(
             values: values,
             labels: labels,
-            color: isCost ? scheme.tertiary : scheme.primary,
+            color: isCost
+                ? scheme.primary.withValues(alpha: 0.72)
+                : scheme.primary,
             money: isCost,
           ),
           const SizedBox(height: 6),
@@ -352,7 +354,9 @@ class OverviewPage extends StatelessWidget {
                     ].join(' · '),
                     value: fmtCompact(shown[i]['calls']),
                     progress: asDouble(shown[i]['calls']) / maxCalls,
-                    color: i == 0 ? scheme.secondary : scheme.secondary.withValues(alpha: 0.65),
+                    color: i == 0
+                        ? scheme.primary
+                        : scheme.primary.withValues(alpha: 0.6),
                   ),
               ],
             ),
