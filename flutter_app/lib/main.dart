@@ -76,10 +76,12 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
     state?.refreshAll();
   }
 
-  Future<void> _openSettings() async {
+  /// 必须用 MaterialApp 内部的 context 才能拿到 Navigator；
+  /// 直接用 State.context 会找不到 Navigator，点击没有任何反应。
+  Future<void> _openSettings(BuildContext nav) async {
     final s = state;
     if (s == null) return;
-    final cfg = await Navigator.of(context).push<AppConfig>(
+    final cfg = await Navigator.of(nav).push<AppConfig>(
       MaterialPageRoute(
         builder: (_) => SettingsPage(initial: s.config),
       ),
@@ -171,7 +173,7 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
           ),
           IconButton(
             tooltip: '设置',
-            onPressed: _openSettings,
+            onPressed: () => _openSettings(context),
             icon: const Icon(Icons.settings_outlined, size: 21),
           ),
           const SizedBox(width: 4),
@@ -192,7 +194,13 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
         selectedIndex: tab,
         onDestinationSelected: (i) {
           setState(() => tab = i);
-          if (_pages.hasClients) _pages.jumpToPage(i);
+          if (_pages.hasClients) {
+            _pages.animateToPage(
+              i,
+              duration: const Duration(milliseconds: 360),
+              curve: Curves.easeOutCubic,
+            );
+          }
           if (i == 1) {
             s.startLive();
           } else {

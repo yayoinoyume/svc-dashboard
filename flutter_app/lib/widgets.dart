@@ -81,8 +81,8 @@ class AnimatedNumber extends StatelessWidget {
   Widget build(BuildContext context) {
     return TweenAnimationBuilder<double>(
       tween: Tween<double>(begin: 0, end: value),
-      duration: const Duration(milliseconds: 500),
-      curve: Curves.easeOutCubic,
+      duration: const Duration(milliseconds: 780),
+      curve: Curves.easeOutExpo,
       builder: (context, v, _) => Text(format(v), style: style),
     );
   }
@@ -354,7 +354,7 @@ class StatStrip extends StatelessWidget {
   }
 }
 
-class TrendChart extends StatelessWidget {
+class TrendChart extends StatefulWidget {
   final List<double> values;
   final List<String> labels;
   final Color color;
@@ -371,32 +371,61 @@ class TrendChart extends StatelessWidget {
   });
 
   @override
+  State<TrendChart> createState() => _TrendChartState();
+}
+
+class _TrendChartState extends State<TrendChart> {
+  int? _active;
+
+  void _select(double x, double width) {
+    if (widget.values.isEmpty) return;
+    const padL = 6.0, padR = 6.0;
+    final chartW = width - padL - padR;
+    if (chartW <= 0) return;
+    var i = ((x - padL) / chartW * (widget.values.length - 1)).round();
+    i = i.clamp(0, widget.values.length - 1);
+    if (i == _active) return;
+    setState(() => _active = i);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (values.isEmpty) {
+    if (widget.values.isEmpty) {
       return SizedBox(
-        height: height,
+        height: widget.height,
         child: const EmptyHint('暂无趋势数据'),
       );
     }
-    final signature = values.fold<double>(0, (a, b) => a + b) + values.length;
-    return TweenAnimationBuilder<double>(
-      key: ValueKey(signature.toStringAsFixed(2)),
-      tween: Tween<double>(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 680),
-      curve: Curves.easeOutCubic,
-      builder: (context, t, _) => SizedBox(
-        height: height,
-        child: CustomPaint(
-          painter: _TrendPainter(
-            values: values,
-            labels: labels,
-            color: color,
-            textColor: AppColors.onSurfaceVariant,
-            gridColor: AppColors.outline,
-            money: money,
-            progress: t,
+    final signature =
+        widget.values.fold<double>(0, (a, b) => a + b) + widget.values.length;
+
+    return LayoutBuilder(
+      builder: (context, box) => GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (d) => _select(d.localPosition.dx, box.maxWidth),
+        onHorizontalDragUpdate: (d) =>
+            _select(d.localPosition.dx, box.maxWidth),
+        child: TweenAnimationBuilder<double>(
+          key: ValueKey(signature.toStringAsFixed(2)),
+          tween: Tween<double>(begin: 0, end: 1),
+          duration: const Duration(milliseconds: 680),
+          curve: Curves.easeOutCubic,
+          builder: (context, t, _) => SizedBox(
+            height: widget.height,
+            child: CustomPaint(
+              painter: _TrendPainter(
+                values: widget.values,
+                labels: widget.labels,
+                color: widget.color,
+                textColor: AppColors.onSurfaceVariant,
+                gridColor: AppColors.outline,
+                money: widget.money,
+                progress: t,
+                active: _active,
+              ),
+              size: Size.infinite,
+            ),
           ),
-          size: Size.infinite,
         ),
       ),
     );
@@ -411,6 +440,7 @@ class _TrendPainter extends CustomPainter {
   final Color gridColor;
   final bool money;
   final double progress;
+  final int? active;
 
   _TrendPainter({
     required this.values,
@@ -420,6 +450,7 @@ class _TrendPainter extends CustomPainter {
     required this.gridColor,
     required this.money,
     required this.progress,
+    required this.active,
   });
 
   @override
@@ -536,6 +567,84 @@ class _TrendPainter extends CustomPainter {
       final lx = (xAt(i) - t.width / 2).clamp(2.0, w - t.width - 2);
       t.paint(canvas, Offset(lx, h - padB + 6));
     }
+
+    final a = active;
+    if (a != null && a >= 0 && a < values.length) {
+      final ax = xAt(a);
+      final ay = yAt(values[a]);
+
+      _dashedLine(
+        canvas,
+        Offset(ax, padT),
+        Offset(ax, h - padB),
+        Paint()
+          ..color = color.withValues(alpha: 0.45)
+          ..strokeWidth = 1,
+      );
+
+      canvas.drawCircle(
+        Offset(ax, ay),
+        7,
+        Paint()..color = color.withValues(alpha: 0.22),
+      );
+      canvas.drawCircle(
+        Offset(ax, ay),
+        3.4,
+        Paint()..color = color,
+      );
+
+      final label = a < labels.length ? labels[a] : '';
+      final valText = money ? fmtMoney(values[a]) : fmtCompact(values[a]);
+      final text = label.isEmpty ? valText : '$label  $valText';
+      final tp = TextPainter(
+        text: TextSpan(
+          text: text,
+          style: const TextStyle(
+            color: Color(0xFFE8EAF6),
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+
+      const pad = 9.0;
+      const bh = 22.0;
+      final bw = tp.width + pad * 2;
+      final maxX = math.max(2.0, w - bw - 2);
+      final bx = (ax - bw / 2).clamp(2.0, maxX).toDouble();
+      var by = ay - bh - 12;
+      if (by < 2) by = ay + 12;
+
+      final rect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(bx, by, bw, bh),
+        const Radius.circular(7),
+      );
+      canvas.drawRRect(rect, Paint()..color = const Color(0xFF202737));
+      canvas.drawRRect(
+        rect,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.8
+          ..color = color.withValues(alpha: 0.45),
+      );
+      tp.paint(canvas, Offset(bx + pad, by + (bh - tp.height) / 2));
+    }
+  }
+
+  void _dashedLine(Canvas canvas, Offset a, Offset b, Paint paint) {
+    const dash = 4.0;
+    const gap = 4.0;
+    final delta = b - a;
+    final total = delta.distance;
+    if (total <= 0) return;
+    final dir = delta / total;
+    var d = 0.0;
+    while (d < total) {
+      final end = math.min(d + dash, total);
+      canvas.drawLine(a + dir * d, a + dir * end, paint);
+      d += dash + gap;
+    }
   }
 
   @override
@@ -543,7 +652,8 @@ class _TrendPainter extends CustomPainter {
     return oldDelegate.values != values ||
         oldDelegate.labels != labels ||
         oldDelegate.color != color ||
-        oldDelegate.progress != progress;
+        oldDelegate.progress != progress ||
+        oldDelegate.active != active;
   }
 }
 

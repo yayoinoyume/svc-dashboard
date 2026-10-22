@@ -423,6 +423,7 @@ class _RoutingPageState extends State<RoutingPage> {
       else
         for (final r in shown) ...[
           _RouteRow(
+            key: ValueKey(r['id'].toString()),
             route: r,
             open: expanded.contains(r['id'].toString()),
             onTap: () {
@@ -585,6 +586,7 @@ class _RouteRow extends StatelessWidget {
   final VoidCallback onTap;
 
   const _RouteRow({
+    super.key,
     required this.route,
     required this.open,
     required this.onTap,
@@ -601,7 +603,18 @@ class _RouteRow extends StatelessWidget {
     final tokens = asInt((r['prompt'] is Map) ? r['prompt']['tokens'] : 0);
     final tps = _tpsOf(r);
 
-    return Container(
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+      builder: (_, t, child) => Opacity(
+        opacity: t,
+        child: Transform.translate(
+          offset: Offset(0, 10 * (1 - t)),
+          child: child,
+        ),
+      ),
+      child: Container(
       decoration: BoxDecoration(
         color: st == 'live' ? const Color(0xFF171427) : AppColors.surfaceLow,
         borderRadius: BorderRadius.circular(13),
@@ -711,16 +724,27 @@ class _RouteRow extends StatelessWidget {
                     ],
                   ],
                 ),
-                if (open) ...[
-                  const SizedBox(height: 8),
-                  const Divider(color: Color(0x1FA9B0C6), height: 1),
-                  const SizedBox(height: 8),
-                  _detail(r),
-                ],
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 240),
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment.topCenter,
+                  child: open
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const SizedBox(height: 8),
+                            const Divider(color: Color(0x1FA9B0C6), height: 1),
+                            const SizedBox(height: 8),
+                            _detail(r),
+                          ],
+                        )
+                      : const SizedBox(width: double.infinity),
+                ),
               ],
             ),
           ),
         ),
+      ),
       ),
     );
   }
