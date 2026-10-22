@@ -1,0 +1,68 @@
+name: Build Magpie Flutter APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - magpie-monitor-app
+    paths:
+      - "flutter_app/**"
+      - ".github/workflows/build-magpie-flutter-apk.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Prepare host project
+        run: |
+          flutter create --org uk.yayoi --project-name magpie_flutter --platforms=android /tmp/magpie_host
+          rm -rf /tmp/magpie_host/lib
+          cp -r flutter_app/lib /tmp/magpie_host/lib
+          cp flutter_app/pubspec.yaml /tmp/magpie_host/pubspec.yaml
+          cp flutter_app/analysis_options.yaml /tmp/magpie_host/analysis_options.yaml
+          sed -i 's/android:label="magpie_flutter"/android:label="Magpie Flutter"/' /tmp/magpie_host/android/app/src/main/AndroidManifest.xml
+          mkdir -p ~/.android
+          cp android/debug.keystore ~/.android/debug.keystore
+
+      - name: Install dependencies
+        working-directory: /tmp/magpie_host
+        run: flutter pub get
+
+      - name: Analyze
+        working-directory: /tmp/magpie_host
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Build debug APK
+        working-directory: /tmp/magpie_host
+        run: flutter build apk --debug
+
+      - name: Copy APK
+        run: cp /tmp/magpie_host/build/app/outputs/flutter-apk/app-debug.apk magpie-flutter-debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: magpie-flutter-apk
+          path: magpie-flutter-debug.apk
+          if-no-files-found: error
+          retention-days: 30
