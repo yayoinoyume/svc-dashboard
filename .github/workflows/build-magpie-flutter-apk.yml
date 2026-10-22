@@ -41,6 +41,9 @@ jobs:
           cp flutter_app/pubspec.yaml /tmp/magpie_host/pubspec.yaml
           cp flutter_app/analysis_options.yaml /tmp/magpie_host/analysis_options.yaml
           sed -i 's/android:label="magpie_flutter"/android:label="Magpie Flutter"/' /tmp/magpie_host/android/app/src/main/AndroidManifest.xml
+          # release 清单默认没有网络权限（只有 debug/profile 清单带），必须显式补上
+          sed -i '/<application/i\    <uses-permission android:name="android.permission.INTERNET"/>' /tmp/magpie_host/android/app/src/main/AndroidManifest.xml
+          grep -q 'android.permission.INTERNET' /tmp/magpie_host/android/app/src/main/AndroidManifest.xml || { echo '缺少 INTERNET 权限'; exit 1; }
           mkdir -p ~/.android
           cp android/debug.keystore ~/.android/debug.keystore
 

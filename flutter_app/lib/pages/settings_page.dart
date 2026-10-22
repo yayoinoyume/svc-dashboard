@@ -1,5 +1,9 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
+import '../api.dart';
 import '../store.dart';
 import '../theme.dart';
 
@@ -67,12 +71,45 @@ class _SettingsPageState extends State<SettingsPage> {
 
     setState(() {
       saving = true;
-      message = '正在保存…';
+      message = '正在保存并测试连接…';
       ok = true;
     });
 
     await ConfigStore.save(cfg);
+
+    final probe = ApiClient(
+      baseUrl: cfg.baseUrl,
+      key: cfg.key,
+      cookieName: cfg.cookieName,
+    );
+    String? fail;
+    try {
+      await probe.getJson(
+        '/api/usage?period=today',
+        timeout: const Duration(seconds: 12),
+      );
+    } on ApiException catch (e) {
+      fail = e.toString();
+    } on SocketException {
+      fail = '无法连接服务器，请检查地址与网络';
+    } on TimeoutException {
+      fail = '连接超时，请检查网络';
+    } catch (e) {
+      fail = '连接失败：$e';
+    } finally {
+      probe.close();
+    }
     if (!mounted) return;
+
+    if (fail != null) {
+      final err = fail!;
+      setState(() {
+        saving = false;
+        ok = false;
+        message = err;
+      });
+      return;
+    }
 
     if (widget.onSaved != null) {
       widget.onSaved!(cfg);
