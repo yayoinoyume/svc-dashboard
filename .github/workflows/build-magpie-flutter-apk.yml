@@ -52,17 +52,21 @@ jobs:
         working-directory: /tmp/magpie_host
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
-      - name: Build debug APK
+      - name: Build release APK
         working-directory: /tmp/magpie_host
-        run: flutter build apk --debug
+        run: flutter build apk --release --split-per-abi
 
-      - name: Copy APK
-        run: cp /tmp/magpie_host/build/app/outputs/flutter-apk/app-debug.apk magpie-flutter-debug.apk
+      - name: Copy APKs
+        run: |
+          cp /tmp/magpie_host/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk magpie-flutter-arm64.apk
+          cp /tmp/magpie_host/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk magpie-flutter-armv7.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: magpie-flutter-apk
-          path: magpie-flutter-debug.apk
+          path: |
+            magpie-flutter-arm64.apk
+            magpie-flutter-armv7.apk
           if-no-files-found: error
           retention-days: 30
