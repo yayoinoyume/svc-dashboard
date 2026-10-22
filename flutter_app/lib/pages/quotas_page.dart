@@ -56,7 +56,8 @@ class _QuotasPageState extends State<QuotasPage> {
         for (final q in list) {
           var minRemain = 100.0;
           for (final w in asMapList(q['windows'])) {
-            final remain = 100 - asDouble(w['used']).clamp(0, 100);
+            final remain =
+                (100.0 - asDouble(w['used']).clamp(0.0, 100.0)).toDouble();
             if (remain < minRemain) minRemain = remain;
           }
           q['_min'] = minRemain;
@@ -67,7 +68,8 @@ class _QuotasPageState extends State<QuotasPage> {
         var lowCount = 0;
         for (final q in list) {
           for (final w in asMapList(q['windows'])) {
-            final remain = 100 - asDouble(w['used']).clamp(0, 100);
+            final remain =
+                (100.0 - asDouble(w['used']).clamp(0.0, 100.0)).toDouble();
             allRemain.add(remain);
             if (remain < 30) lowCount++;
           }
@@ -277,8 +279,8 @@ class _QuotasPageState extends State<QuotasPage> {
   }
 
   Widget _window(BuildContext context, Map<String, dynamic> w, String label) {
-    final used = asDouble(w['used']).clamp(0, 100);
-    final remain = 100 - used;
+    final remain =
+        (100.0 - asDouble(w['used']).clamp(0.0, 100.0)).toDouble();
     final color = remain >= 60
         ? AppColors.success
         : remain >= 30

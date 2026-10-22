@@ -113,9 +113,9 @@ class OverviewPage extends StatelessWidget {
           Row(
             children: [
               _heroMeta(fmtInt(calls), '次调用'),
-              const _dot(),
+              _dot(),
               _heroMeta(fmtInt(errors), '错误'),
-              const _dot(),
+              _dot(),
               _heroMeta(fmtInt(retried), '重试'),
             ],
           ),

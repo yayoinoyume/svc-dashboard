@@ -36,7 +36,7 @@ jobs:
       - name: Prepare host project
         run: |
           flutter create --org uk.yayoi --project-name magpie_flutter --platforms=android /tmp/magpie_host
-          rm -rf /tmp/magpie_host/lib
+          rm -rf /tmp/magpie_host/lib /tmp/magpie_host/test
           cp -r flutter_app/lib /tmp/magpie_host/lib
           cp flutter_app/pubspec.yaml /tmp/magpie_host/pubspec.yaml
           cp flutter_app/analysis_options.yaml /tmp/magpie_host/analysis_options.yaml
