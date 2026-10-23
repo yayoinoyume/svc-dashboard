@@ -272,9 +272,11 @@ class _FlowDiagramState extends State<FlowDiagram>
   }
 
   Widget _hub(_Layout lay) {
+    // 方块的垂直中心要对准 hubCy，否则连线端点会偏离方块两侧中点：
+    // 这里只减去方块半径，标签自然垂在下方，不参与对齐。
     return Positioned(
       left: lay.hubCx - 18,
-      top: lay.hubCy - 26,
+      top: lay.hubCy - 18,
       width: 36,
       child: Column(
         mainAxisSize: MainAxisSize.min,
