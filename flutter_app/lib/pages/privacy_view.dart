@@ -1090,8 +1090,8 @@ class _MaskFlowState extends State<_MaskFlow>
     duration: const Duration(milliseconds: 2400),
   );
 
-  static const _leftW = 84.0;
-  static const _rightW = 90.0;
+  static const _leftW = 80.0;
+  static const _rightW = 86.0;
   static const _rowH = 34.0;
   static const _nodeH = 28.0;
 
@@ -1193,7 +1193,7 @@ class _MaskFlowState extends State<_MaskFlow>
                 x['name']?.toString() ?? '',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 10),
+                style: const TextStyle(fontSize: 9.5),
               ),
             ),
             const SizedBox(width: 4),
@@ -1274,7 +1274,7 @@ class _MaskFlowPainter extends CustomPainter {
       1,
       (a, x) => math.max(a, asInt(x['n'])),
     );
-    const hubR = 30.0;
+    const hubR = 26.0;
     final cy = height / 2;
 
     for (var i = 0; i < agents.length; i++) {
@@ -1327,23 +1327,10 @@ class _MaskFlowPainter extends CustomPainter {
     final paint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
-      ..strokeWidth = widthPx;
-
-    final rect = Rect.fromPoints(a, b);
-    final safeRect = (rect.width.abs() < 0.5 || rect.height.abs() < 0.5)
-        ? Rect.fromLTRB(a.dx, a.dy - 0.5, b.dx, b.dy + 0.5)
-        : rect;
-    try {
-      paint.shader = LinearGradient(
-        begin: Alignment.centerLeft,
-        end: Alignment.centerRight,
-        colors: fromHub
-            ? [AppColors.seed, AppColors.seed.withValues(alpha: 0.35)]
-            : [AppColors.seed.withValues(alpha: 0.35), AppColors.seed],
-      ).createShader(safeRect);
-    } catch (_) {
-      paint.color = AppColors.seed;
-    }
+      ..strokeWidth = widthPx
+      ..color = fromHub
+          ? AppColors.seed
+          : AppColors.seed.withValues(alpha: 0.62);
     canvas.drawPath(path, paint);
 
     if (!animate) return;

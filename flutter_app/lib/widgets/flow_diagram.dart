@@ -466,9 +466,8 @@ class _FlowPainter extends CustomPainter {
         canvas.drawPath(p2, glowPaint);
       }
 
-      // 激活链路用方向渐变：从节点一侧淡出，到网关一侧最亮
-      canvas.drawPath(p1, _stroke(color, stroke, a1, b1, fromHub: false));
-      canvas.drawPath(p2, _stroke(color, stroke, a2, b2, fromHub: true));
+      canvas.drawPath(p1, _stroke(color, stroke));
+      canvas.drawPath(p2, _stroke(color, stroke));
 
       if (l.live) {
         final dash = Paint()
@@ -491,48 +490,14 @@ class _FlowPainter extends CustomPainter {
     }
   }
 
-  /// 描边：激活/错误链路用从淡到亮（或从亮到淡）的渐变，
-  /// 空闲链路保持纯色，少建一个 shader。
-  Paint _stroke(
-    Color color,
-    double width,
-    Offset from,
-    Offset to, {
-    required bool fromHub,
-  }) {
-    final paint = Paint()
+  /// 描边统一用纯色：shader 在窄区间里容易退化成看不见，
+  /// 方向感交给虚线和光点，线本身必须始终可见。
+  Paint _stroke(Color color, double width) {
+    return Paint()
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
-      ..strokeWidth = width;
-
-    // 空闲链路本来就是半透明的，直接纯色，省一个 shader
-    if (color.a < 0.5) {
-      return paint..color = color;
-    }
-
-    // 渐变最淡的一端也保留 35%：细线再淡就看不见了
-    final faint = color.withValues(alpha: 0.35);
-    var rect = Rect.fromPoints(from, to);
-    if (rect.width.abs() < 0.5 || rect.height.abs() < 0.5) {
-      // 两个端点同高时 Rect 会退化，补一点厚度
-      rect = Rect.fromLTRB(
-        math.min(from.dx, to.dx) - 0.5,
-        math.min(from.dy, to.dy) - 0.5,
-        math.max(from.dx, to.dx) + 0.5,
-        math.max(from.dy, to.dy) + 0.5,
-      );
-    }
-    try {
-      paint.shader = LinearGradient(
-        begin: Alignment.centerLeft,
-        end: Alignment.centerRight,
-        colors: fromHub ? [color, faint] : [faint, color],
-      ).createShader(rect);
-    } catch (_) {
-      // shader 万一建不起来，退回纯色，不能让整张图消失
-      paint.color = color;
-    }
-    return paint;
+      ..strokeWidth = width
+      ..color = color;
   }
 
   /// 沿曲线移动的光点：两端淡入淡出，中间一颗实心亮点
