@@ -28,7 +28,7 @@ def write_props(android: Path) -> None:
 KTS_BLOCK = """android {
     signingConfigs {
         create("release") {
-            val props = java.util.Properties()
+            val props = Properties()
             val f = rootProject.file("key.properties")
             if (f.exists()) f.inputStream().use { props.load(it) }
             storeFile = file(props.getProperty("storeFile"))
@@ -56,6 +56,8 @@ GROOVY_BLOCK = """android {
 
 def patch_kts(path: Path) -> None:
     text = path.read_text()
+    if "import java.util.Properties" not in text:
+        text = "import java.util.Properties\n\n" + text
     head = text.split("buildTypes")[0]
     if "signingConfigs" not in head:
         text = text.replace("android {", KTS_BLOCK, 1)
