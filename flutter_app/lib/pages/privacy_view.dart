@@ -53,6 +53,9 @@ const _whatNames = <String, String>{
   'audio': '音频',
 };
 
+/// 流向图每行高度：节点定位和曲线端点共用，改一处即可
+const _flowRowH = 34.0;
+
 const _palette = <Color>[
   Color(0xFF9B7BB8),
   Color(0xFF7BC9A6),
@@ -1092,7 +1095,6 @@ class _MaskFlowState extends State<_MaskFlow>
 
   static const _leftW = 80.0;
   static const _rightW = 86.0;
-  static const _rowH = 34.0;
   static const _nodeH = 28.0;
 
   bool _reduced = false;
@@ -1115,15 +1117,16 @@ class _MaskFlowState extends State<_MaskFlow>
   }
 
   double get _height =>
-      math.max(widget.agents.length, widget.providers.length) * _rowH + 12;
+      math.max(widget.agents.length, widget.providers.length) * _flowRowH + 12;
 
-  double _yOf(int i, int count) => _height / 2 + (i - (count - 1) / 2) * _rowH;
+  double _yOf(int i, int count) => _height / 2 + (i - (count - 1) / 2) * _flowRowH;
 
   @override
   Widget build(BuildContext context) {
     final h = _height;
     return LayoutBuilder(builder: (context, box) {
-      final w = box.maxWidth;
+      // 横向无界容器里 maxWidth 会是 Infinity，坐标会全变 NaN
+      final w = box.maxWidth.isFinite ? box.maxWidth : 320.0;
       return SizedBox(
         height: h,
         child: Stack(
@@ -1265,7 +1268,7 @@ class _MaskFlowPainter extends CustomPainter {
     required this.animate,
   });
 
-  double _yOf(int i, int count) => height / 2 + (i - (count - 1) / 2) * 34.0;
+  double _yOf(int i, int count) => height / 2 + (i - (count - 1) / 2) * _flowRowH;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1314,14 +1317,7 @@ class _MaskFlowPainter extends CustomPainter {
     final dx = (b.dx - a.dx).abs() * 0.5;
     final path = Path()
       ..moveTo(a.dx, a.dy)
-      ..cubicTo(
-        fromHub ? a.dx + dx : a.dx + dx,
-        a.dy,
-        fromHub ? b.dx - dx : b.dx - dx,
-        b.dy,
-        b.dx,
-        b.dy,
-      );
+      ..cubicTo(a.dx + dx, a.dy, b.dx - dx, b.dy, b.dx, b.dy);
 
     final widthPx = 0.9 + 2.9 * ratio;
     final paint = Paint()
@@ -1335,10 +1331,11 @@ class _MaskFlowPainter extends CustomPainter {
 
     if (!animate) return;
 
-    // 光点
-    final it = path.computeMetrics();
-    if (it.isEmpty) return;
-    final m = it.first;
+    // 光点。PathMetrics 只能迭代一次，必须一次取完再判断，
+    // 否则 isEmpty + first 会消费两次并抛 StateError。
+    final metrics = path.computeMetrics().toList();
+    if (metrics.isEmpty) return;
+    final m = metrics.first;
     if (m.length <= 0) return;
     for (var k = 0; k < 2; k++) {
       final t = (t0 + k / 2) % 1.0;

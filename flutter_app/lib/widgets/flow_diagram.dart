@@ -533,9 +533,12 @@ class _FlowPainter extends CustomPainter {
   }
 
   PathMetric? _firstMetric(Path p) {
-    final it = p.computeMetrics();
-    if (it.isEmpty) return null;
-    return it.first;
+    // PathMetrics 只持有一个迭代器：先 isEmpty 再 first 会消费两次，
+    // 第二次 moveNext 返回 false，first 抛 StateError，整张图就画不出来了。
+    for (final m in p.computeMetrics()) {
+      return m;
+    }
+    return null;
   }
 
   Path _curve(Offset a, Offset b) {
