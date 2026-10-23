@@ -87,6 +87,22 @@ class AppState extends ChangeNotifier {
   final quotasRev = ValueNotifier<int>(0);
   final providersRev = ValueNotifier<int>(0);
 
+  /// 隐私（掩码）统计：只服务「明细 → 隐私」子页
+  final maskingRev = ValueNotifier<int>(0);
+  Map<String, dynamic>? maskingSummary;
+  int maskingDays = 7;
+  DateTime? _maskingAt;
+  bool _maskingRunning = false;
+
+  /// 记录列表与筛选条件，放在这里是为了切走子页再回来不丢
+  List<Map<String, dynamic>> maskingRecords = [];
+  bool maskingMore = false;
+  bool maskingRecordsLoading = false;
+  String maskKind = '';
+  String maskBy = '';
+  String maskAgent = '';
+  String maskProvider = '';
+
   DateTime? _providersAt;
   DateTime? _groupsAt;
   DateTime? _historyAt;
@@ -194,6 +210,117 @@ class AppState extends ChangeNotifier {
     unawaited(refreshUsage());
   }
 
+  // ---------- 隐私（掩码）统计 ----------
+
+  /// 汇总数据。网关不支持时抛 404，页面据此显示升级提示。
+  Future<void> loadMasking({bool force = false}) async {
+    final now = DateTime.now();
+    if (!force &&
+        maskingSummary != null &&
+        _maskingAt != null &&
+        now.difference(_maskingAt!).inSeconds < 12) {
+      return;
+    }
+    try {
+      final d = await api.getJson('/api/masking/summary?days=$maskingDays');
+      maskingSummary = d;
+      maskingError = null;
+      _maskingAt = now;
+      maskingRev.value++;
+    } catch (e) {
+      // 404 = 网关版本太旧；其它错误保留上一份数据
+      maskingError = e is ApiException && e.statusCode == 404
+          ? 'unsupported'
+          : e.toString();
+      maskingRev.value++;
+    }
+  }
+
+  String? maskingError;
+  bool get maskingUnsupported => maskingError == 'unsupported';
+
+  void setMaskingDays(int d) {
+    if (maskingDays == d) return;
+    maskingDays = d;
+    maskingRev.value++;
+    unawaited(loadMasking(force: true));
+  }
+
+  /// 隐私子页可见时才轮询，切走就停
+  void startMaskingLive() {
+    if (_maskingRunning) return;
+    _maskingRunning = true;
+    unawaited(_maskingLoop());
+  }
+
+  void stopMaskingLive() {
+    _maskingRunning = false;
+  }
+
+  Future<void> _maskingLoop() async {
+    while (_maskingRunning) {
+      await loadMasking(force: true);
+      await loadMaskingRecords(force: true);
+      if (!_maskingRunning) break;
+      await Future.delayed(const Duration(seconds: 15));
+    }
+  }
+
+  Future<void> loadMaskingRecords({bool more = false, bool force = false}) async {
+    if (maskingRecordsLoading) return;
+    if (!more && !force && maskingRecords.isNotEmpty) return;
+    maskingRecordsLoading = true;
+    try {
+      final q = <String>['limit=40'];
+      if (more && maskingRecords.isNotEmpty) {
+        q.add('before=${maskingRecords.last['key']}');
+      }
+      if (maskKind.isNotEmpty) q.add('kind=$maskKind');
+      if (maskBy.isNotEmpty) q.add('by=$maskBy');
+      if (maskAgent.isNotEmpty) q.add('agent=$maskAgent');
+      if (maskProvider.isNotEmpty) q.add('provider=$maskProvider');
+      final d = await api.getJson('/api/masking/records?${q.join('&')}');
+      final got = asMapList(d['records']);
+      maskingRecords = more ? [...maskingRecords, ...got] : got;
+      maskingMore = d['more'] == true;
+      maskingRev.value++;
+    } catch (_) {
+      // 老版本网关没有这个接口，页面会按空列表处理
+    } finally {
+      maskingRecordsLoading = false;
+    }
+  }
+
+  /// 换了筛选条件就从头拉
+  void setMaskFilter({
+    String? kind,
+    String? by,
+    String? agent,
+    String? provider,
+  }) {
+    maskKind = kind ?? '';
+    maskBy = by ?? '';
+    maskAgent = agent ?? '';
+    maskProvider = provider ?? '';
+    maskingRecords = [];
+    maskingMore = false;
+    maskingRev.value++;
+    unawaited(loadMaskingRecords(force: true));
+  }
+
+  /// 查占位符对应的原文。网关只存在内存里，重启后返回 null。
+  Future<String?> maskValue(String placeholder) async {
+    try {
+      final d = await api.getJson(
+        '/api/masking/value?p=${Uri.encodeComponent(placeholder)}',
+      );
+      final v = d['value'];
+      return v is String ? v : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   void setMetric(String m) {
     metric = m;
     notifyListeners();
@@ -283,6 +410,7 @@ class AppState extends ChangeNotifier {
 
   void updateConfig(AppConfig c) {
     stopLive();
+    stopMaskingLive();
     config = c;
     api.close();
     api = ApiClient(
@@ -297,22 +425,27 @@ class AppState extends ChangeNotifier {
     groups = null;
     history = null;
     routeOrder = [];
+    maskingSummary = null;
+    _maskingAt = null;
     error = null;
     usageRev.value++;
     traceRev.value++;
     quotasRev.value++;
     providersRev.value++;
+    maskingRev.value++;
     notifyListeners();
   }
 
   @override
   void dispose() {
     _liveRunning = false;
+    _maskingRunning = false;
     api.close();
     usageRev.dispose();
     traceRev.dispose();
     quotasRev.dispose();
     providersRev.dispose();
+    maskingRev.dispose();
     super.dispose();
   }
 }

@@ -505,15 +505,33 @@ class _FlowPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeWidth = width;
 
-    final faint = color.withValues(alpha: color.a * 0.12);
+    // 空闲链路本来就是半透明的，直接纯色，省一个 shader
     if (color.a < 0.5) {
       return paint..color = color;
     }
-    paint.shader = LinearGradient(
-      begin: Alignment.centerLeft,
-      end: Alignment.centerRight,
-      colors: fromHub ? [color, faint] : [faint, color],
-    ).createShader(Rect.fromPoints(from, to));
+
+    // 渐变最淡的一端也保留 35%：细线再淡就看不见了
+    final faint = color.withValues(alpha: 0.35);
+    var rect = Rect.fromPoints(from, to);
+    if (rect.width.abs() < 0.5 || rect.height.abs() < 0.5) {
+      // 两个端点同高时 Rect 会退化，补一点厚度
+      rect = Rect.fromLTRB(
+        math.min(from.dx, to.dx) - 0.5,
+        math.min(from.dy, to.dy) - 0.5,
+        math.max(from.dx, to.dx) + 0.5,
+        math.max(from.dy, to.dy) + 0.5,
+      );
+    }
+    try {
+      paint.shader = LinearGradient(
+        begin: Alignment.centerLeft,
+        end: Alignment.centerRight,
+        colors: fromHub ? [color, faint] : [faint, color],
+      ).createShader(rect);
+    } catch (_) {
+      // shader 万一建不起来，退回纯色，不能让整张图消失
+      paint.color = color;
+    }
     return paint;
   }
 

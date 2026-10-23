@@ -6,6 +6,7 @@ import '../store.dart';
 import '../theme.dart';
 import '../util.dart';
 import '../widgets.dart';
+import 'privacy_view.dart';
 
 class DetailsPage extends StatefulWidget {
   final AppState state;
@@ -39,15 +40,24 @@ class _DetailsPageState extends State<DetailsPage> {
                   ButtonSegment(value: 'accounts', label: Text('账号')),
                   ButtonSegment(value: 'callers', label: Text('调用方')),
                   ButtonSegment(value: 'keys', label: Text('密钥')),
+                  ButtonSegment(value: 'privacy', label: Text('隐私')),
                 ],
                 selected: {tab},
                 onSelectionChanged: (s) => setState(() {
                   tab = s.first;
                   expanded.clear();
+                  if (tab == 'privacy') {
+                    widget.state.startMaskingLive();
+                  } else {
+                    widget.state.stopMaskingLive();
+                  }
                 }),
               ),
             ),
             const SizedBox(height: 14),
+            if (tab == 'privacy')
+              PrivacyView(state: widget.state)
+            else ...[
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(14),
@@ -99,13 +109,14 @@ class _DetailsPageState extends State<DetailsPage> {
                 ),
               ),
             ),
-            const SizedBox(height: 8),
-            Center(
-              child: Text(
-                '数据来自 magpie 用量接口 · $_title',
-                style: const TextStyle(fontSize: 10, color: Color(0xFF6E778F)),
+              const SizedBox(height: 8),
+              Center(
+                child: Text(
+                  '数据来自 magpie 用量接口 · $_title',
+                  style: const TextStyle(fontSize: 10, color: Color(0xFF6E778F)),
+                ),
               ),
-            ),
+            ],
           ],
         );
       },

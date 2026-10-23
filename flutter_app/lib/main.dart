@@ -175,6 +175,8 @@ class _HomeShellState extends State<_HomeShell> {
     } else {
       widget.state.stopLive();
     }
+    // 隐私子页的轮询只在「明细」页开着，切走就停
+    if (i != 4) widget.state.stopMaskingLive();
   }
 
   Future<void> _openSettings() async {
