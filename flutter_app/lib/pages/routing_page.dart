@@ -69,6 +69,9 @@ String _cap(String s) =>
   );
 }
 
+DateTime? _timeOf(Map<String, dynamic> r) =>
+    DateTime.tryParse((r['time'] ?? '').toString());
+
 String _stateOf(Map<String, dynamic> r) {
   if (r['done'] != true) return 'live';
   if (asInt(r['status']) >= 400) return 'err';
@@ -132,6 +135,7 @@ class _Agg {
   int count = 0;
   int live = 0;
   int err = 0;
+  DateTime? lastAt;
   final Set<String> convs = {};
 }
 
@@ -165,16 +169,23 @@ class _Model {
       final a = _agentKey(r);
       final t = _targetOf(r);
       final st = _stateOf(r);
+      final ts = _timeOf(r);
 
       final c = cm.putIfAbsent(a, () => _Agg())
         ..count += 1
         ..convs.add((r['conv'] ?? r['folder'] ?? r['id']).toString());
       if (st == 'live') c.live++;
       if (st == 'err') c.err++;
+      if (ts != null && (c.lastAt == null || ts.isAfter(c.lastAt!))) {
+        c.lastAt = ts;
+      }
 
       final ta = tm.putIfAbsent(t.key, () => _Agg())..count += 1;
       if (st == 'live') ta.live++;
       if (st == 'err') ta.err++;
+      if (ts != null && (ta.lastAt == null || ts.isAfter(ta.lastAt!))) {
+        ta.lastAt = ts;
+      }
       tMeta[t.key] = (kind: t.kind, name: t.name, sub: t.sub);
 
       final ek = '$a|${t.key}';
@@ -187,10 +198,21 @@ class _Model {
       if (st == 'reroute') reroute++;
     }
 
-    final clientKeys = cm.keys.toList()
+    // 只保留仍然活跃的节点：正在处理，或最近 15 秒内有动静。
+    // 否则窗口中所有历史请求会把已经空闲的客户端一直挂在图上。
+    final now = DateTime.now();
+    const activeWindow = Duration(seconds: 15);
+    bool isActive(_Agg? a) =>
+        a != null &&
+        (a.live > 0 ||
+            (a.lastAt != null && now.difference(a.lastAt!) <= activeWindow));
+
+    final clientKeys = cm.keys.where((k) => isActive(cm[k])).toList()
       ..sort((x, y) => cm[y]!.count.compareTo(cm[x]!.count));
-    final targetKeys = tm.keys.toList()
+    final targetKeys = tm.keys.where((k) => isActive(tm[k])).toList()
       ..sort((x, y) => tm[y]!.count.compareTo(tm[x]!.count));
+    final activeClients = clientKeys.toSet();
+    final activeTargets = targetKeys.toSet();
 
     final clients = [
       for (final k in clientKeys)
@@ -224,16 +246,24 @@ class _Model {
         ),
     ];
 
-    final links = [
-      for (final e in em.entries)
+    final links = <FlowLink>[];
+    for (final e in em.entries) {
+      final sep = e.key.indexOf('|');
+      final from = e.key.substring(0, sep);
+      final to = e.key.substring(sep + 1);
+      if (!activeClients.contains(from) || !activeTargets.contains(to)) {
+        continue;
+      }
+      links.add(
         FlowLink(
-          from: e.key.split('|').first,
-          to: e.key.split('|').last,
+          from: from,
+          to: to,
           count: e.value.count,
           live: e.value.live > 0,
           err: e.value.err > 0,
         ),
-    ];
+      );
+    }
 
     return _Model(
       clients: clients,
@@ -333,9 +363,11 @@ class _RoutingPageState extends State<RoutingPage> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          '${model.clients.length} 个客户端 · '
-                          '${model.targets.length} 个目标 · '
-                          '${model.links.length} 条流向',
+                          model.clients.isEmpty
+                              ? '当前没有活跃请求'
+                              : '${model.clients.length} 个客户端 · '
+                                  '${model.targets.length} 个目标 · '
+                                  '${model.links.length} 条流向',
                           style: const TextStyle(
                             fontSize: 10,
                             color: Color(0xFF6E778F),
@@ -351,7 +383,7 @@ class _RoutingPageState extends State<RoutingPage> {
               if (model.clients.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 40),
-                  child: EmptyHint('暂无路由记录'),
+                  child: EmptyHint('当前空闲，等待新请求'),
                 )
               else
                 FlowDiagram(
