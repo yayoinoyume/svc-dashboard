@@ -28,6 +28,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Load signing material
+        uses: 1password/load-secrets-action@v2
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          KEYSTORE_B64: op://Magpie/magpie-signing/base64
+          KEYSTORE_PASSWORD: op://Magpie/magpie-signing/password
+          KEY_ALIAS: op://Magpie/magpie-signing/alias
+          KEY_PASSWORD: op://Magpie/magpie-signing/key_password
+
       - name: Resolve version
         id: ver
         run: |
@@ -63,8 +74,9 @@ jobs:
           # release 清单默认没有网络权限（只有 debug/profile 清单带），必须显式补上
           sed -i '/<application/i\    <uses-permission android:name="android.permission.INTERNET"/>' /tmp/magpie_host/android/app/src/main/AndroidManifest.xml
           grep -q 'android.permission.INTERNET' /tmp/magpie_host/android/app/src/main/AndroidManifest.xml || { echo '缺少 INTERNET 权限'; exit 1; }
-          mkdir -p ~/.android
-          cp android/debug.keystore ~/.android/debug.keystore
+          # 用 1Password 里的正式签名密钥，不再使用仓库内的 debug keystore
+          echo "$KEYSTORE_B64" | base64 -d > /tmp/magpie-release.p12
+          python3 .github/scripts/configure-signing.py /tmp/magpie_host
 
       - name: Stamp version
         working-directory: /tmp/magpie_host
