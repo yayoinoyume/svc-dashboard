@@ -170,16 +170,31 @@ ThemeData buildTheme(ColorScheme? dynamicDark) {
 }
 
 /// 动态色优先，取不到时回退到博客主色。
-class AppThemeBuilder extends StatelessWidget {
+///
+/// 主题对象必须缓存：否则每次父级 setState（例如切页）都会生成新的
+/// ThemeData，MaterialApp 会认为主题变了，触发整棵子树重建。
+class AppThemeBuilder extends StatefulWidget {
   final Widget Function(ThemeData theme) builder;
 
   const AppThemeBuilder({super.key, required this.builder});
 
   @override
+  State<AppThemeBuilder> createState() => _AppThemeBuilderState();
+}
+
+class _AppThemeBuilderState extends State<AppThemeBuilder> {
+  ThemeData? _cached;
+  ColorScheme? _scheme;
+
+  @override
   Widget build(BuildContext context) {
     return DynamicColorBuilder(
       builder: (lightDynamic, darkDynamic) {
-        return builder(buildTheme(darkDynamic));
+        if (_cached == null || !identical(_scheme, darkDynamic)) {
+          _scheme = darkDynamic;
+          _cached = buildTheme(darkDynamic);
+        }
+        return widget.builder(_cached!);
       },
     );
   }

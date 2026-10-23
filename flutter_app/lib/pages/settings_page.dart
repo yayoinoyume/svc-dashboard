@@ -162,7 +162,7 @@ class _SettingsPageState extends State<SettingsPage> {
             controller: base,
             keyboardType: TextInputType.url,
             autocorrect: false,
-            decoration: const InputDecoration(hintText: 'https://magpie.example.invalid'),
+            decoration: const InputDecoration(hintText: 'https://你的网关地址'),
           ),
           const SizedBox(height: 18),
           const Text('访问密钥', style: TextStyle(fontSize: 11.5, color: AppColors.onSurfaceVariant)),

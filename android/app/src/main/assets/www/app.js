@@ -4,7 +4,7 @@
   var REFRESH_MS = 20000;
   var TRACE_MS = 15000;
   var PROVIDERS_MS = 10 * 60 * 1000;
-  var DEFAULT_BASE = "https://magpie.example.invalid";
+  var DEFAULT_BASE = "";
   var DEFAULT_COOKIE = "magpie_web_3430";
 
   /* Material Design 3 (Material You) Tonal Accent Palette */

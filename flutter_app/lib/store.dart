@@ -12,12 +12,14 @@ class AppConfig {
   String cookieName;
 
   AppConfig({
-    this.baseUrl = 'https://magpie.example.invalid',
+    // 仓库是公开的，默认地址留空，由用户首次打开时自行填写
+    this.baseUrl = '',
     this.key = '',
     this.cookieName = 'magpie_web_3430',
   });
 
-  bool get hasKey => key.trim().isNotEmpty;
+  bool get hasKey =>
+      key.trim().isNotEmpty && baseUrl.trim().isNotEmpty;
 }
 
 class ConfigStore {
@@ -28,7 +30,7 @@ class ConfigStore {
   static Future<AppConfig> load() async {
     final p = await SharedPreferences.getInstance();
     return AppConfig(
-      baseUrl: p.getString(_kBase) ?? 'https://magpie.example.invalid',
+      baseUrl: p.getString(_kBase) ?? '',
       key: p.getString(_kKey) ?? '',
       cookieName: p.getString(_kCookie) ?? 'magpie_web_3430',
     );

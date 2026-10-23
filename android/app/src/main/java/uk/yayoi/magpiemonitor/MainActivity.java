@@ -41,7 +41,7 @@ import java.util.Map;
  */
 public class MainActivity extends Activity {
     private static final String LOCAL_HOST = "app.local";
-    private static final String DEFAULT_BASE = "https://magpie.example.invalid";
+    private static final String DEFAULT_BASE = "";
     private static final String DEFAULT_COOKIE = "magpie_web_3430";
 
     private WebView web;

@@ -26,11 +26,11 @@ class MagpieApp extends StatefulWidget {
 class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
   late AppConfig config;
   AppState? state;
-  int tab = 0;
-  final PageController _pages = PageController();
 
-  /// 页面实例只创建一次。若每次 build 都新建 Widget，
-  /// PageView 里保活的页面会被全部 update → rebuild，切页就会卡。
+  /// 当前页签放在 Notifier 里，切页只通知导航栏和 TickerMode，
+  /// 不再重建 Scaffold / PageView / 主题。
+  final ValueNotifier<int> _tab = ValueNotifier(0);
+
   late List<Widget> _pageViews = const [];
 
   @override
@@ -39,7 +39,7 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
     config = widget.initialConfig;
     if (config.hasKey) {
       state = AppState(config);
-      _pageViews = _buildPages(state!);
+      _pageViews = _pagesFor(state!);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         state?.refreshAll();
       });
@@ -50,7 +50,7 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _pages.dispose();
+    _tab.dispose();
     state?.dispose();
     super.dispose();
   }
@@ -60,7 +60,7 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
     final s = state;
     if (s == null) return;
     if (lifecycle == AppLifecycleState.resumed) {
-      if (tab == 1) s.startLive();
+      if (_tab.value == 1) s.startLive();
       s.refreshAll();
     } else if (lifecycle == AppLifecycleState.paused ||
         lifecycle == AppLifecycleState.inactive ||
@@ -69,20 +69,7 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
     }
   }
 
-  void _connect(AppConfig cfg) {
-    final old = state;
-    setState(() {
-      config = cfg;
-      state = AppState(cfg);
-      _pageViews = _buildPages(state!);
-      tab = 0;
-    });
-    old?.dispose();
-    if (_pages.hasClients) _pages.jumpToPage(0);
-    state?.refreshAll();
-  }
-
-  List<Widget> _buildPages(AppState s) => [
+  List<Widget> _pagesFor(AppState s) => [
         OverviewPage(state: s),
         RoutingPage(state: s),
         QuotasPage(state: s),
@@ -90,20 +77,16 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
         DetailsPage(state: s),
       ];
 
-  /// 必须用 MaterialApp 内部的 context 才能拿到 Navigator；
-  /// 直接用 State.context 会找不到 Navigator，点击没有任何反应。
-  Future<void> _openSettings(BuildContext nav) async {
-    final s = state;
-    if (s == null) return;
-    final cfg = await Navigator.of(nav).push<AppConfig>(
-      MaterialPageRoute(
-        builder: (_) => SettingsPage(initial: s.config),
-      ),
-    );
-    if (cfg != null) {
-      s.updateConfig(cfg);
-      s.refreshAll(force: true);
-    }
+  void _connect(AppConfig cfg) {
+    final old = state;
+    setState(() {
+      config = cfg;
+      state = AppState(cfg);
+      _pageViews = _pagesFor(state!);
+      _tab.value = 0;
+    });
+    old?.dispose();
+    state?.refreshAll();
   }
 
   @override
@@ -118,7 +101,12 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
           darkTheme: theme,
           themeMode: ThemeMode.dark,
           home: ready
-              ? Builder(builder: (ctx) => _home(ctx))
+              ? _HomeShell(
+                  key: ObjectKey(state),
+                  state: state!,
+                  pages: _pageViews,
+                  tab: _tab,
+                )
               : SettingsPage(
                   initial: config,
                   setupMode: true,
@@ -128,9 +116,81 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
       },
     );
   }
+}
 
-  Widget _home(BuildContext context) {
-    final s = state!;
+class _HomeShell extends StatefulWidget {
+  final AppState state;
+  final List<Widget> pages;
+  final ValueNotifier<int> tab;
+
+  const _HomeShell({
+    super.key,
+    required this.state,
+    required this.pages,
+    required this.tab,
+  });
+
+  @override
+  State<_HomeShell> createState() => _HomeShellState();
+}
+
+class _HomeShellState extends State<_HomeShell> {
+  final PageController _pc = PageController();
+
+  /// PageView 只创建一次，切页时不会重建。
+  late final Widget _body = PageView(
+    controller: _pc,
+    physics: const NeverScrollableScrollPhysics(),
+    children: [
+      for (var i = 0; i < widget.pages.length; i++)
+        ValueListenableBuilder<int>(
+          valueListenable: widget.tab,
+          builder: (_, tab, __) => TickerMode(
+            // 离屏页面静音 Ticker，避免流向图等循环动画后台重绘。
+            enabled: tab == i,
+            child: _KeepAlive(child: widget.pages[i]),
+          ),
+        ),
+    ],
+  );
+
+  @override
+  void dispose() {
+    _pc.dispose();
+    super.dispose();
+  }
+
+  void _go(int i) {
+    if (widget.tab.value == i) return;
+    widget.tab.value = i;
+    if (_pc.hasClients) {
+      _pc.animateToPage(
+        i,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+    }
+    if (i == 1) {
+      widget.state.startLive();
+    } else {
+      widget.state.stopLive();
+    }
+  }
+
+  Future<void> _openSettings() async {
+    final cfg = await Navigator.of(context).push<AppConfig>(
+      MaterialPageRoute(
+        builder: (_) => SettingsPage(initial: widget.state.config),
+      ),
+    );
+    if (cfg != null) {
+      widget.state.updateConfig(cfg);
+      widget.state.refreshAll(force: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
@@ -180,71 +240,48 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
           IconButton(
             tooltip: '刷新',
             onPressed: () {
-              s.refreshAll(force: true);
-              if (tab == 1) s.loadTraceOnce();
+              widget.state.refreshAll(force: true);
+              if (widget.tab.value == 1) widget.state.loadTraceOnce();
             },
             icon: const Icon(Icons.refresh_rounded, size: 21),
           ),
           IconButton(
             tooltip: '设置',
-            onPressed: () => _openSettings(context),
+            onPressed: _openSettings,
             icon: const Icon(Icons.settings_outlined, size: 21),
           ),
           const SizedBox(width: 4),
         ],
       ),
-      body: PageView(
-        controller: _pages,
-        physics: const NeverScrollableScrollPhysics(),
-        children: [
-          for (var i = 0; i < _pageViews.length; i++)
-            TickerMode(
-              // 离屏页面必须静音 Ticker，否则流向图等循环动画
-              // 会在后台持续重绘，拖慢所有页面的切换。
-              enabled: tab == i,
-              child: _KeepAlive(child: _pageViews[i]),
+      body: _body,
+      bottomNavigationBar: ValueListenableBuilder<int>(
+        valueListenable: widget.tab,
+        builder: (_, tab, __) => NavigationBar(
+          selectedIndex: tab,
+          onDestinationSelected: _go,
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.grid_view_rounded),
+              label: '概览',
             ),
-        ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: tab,
-        onDestinationSelected: (i) {
-          setState(() => tab = i);
-          if (_pages.hasClients) {
-            _pages.animateToPage(
-              i,
-              duration: const Duration(milliseconds: 260),
-              curve: Curves.easeOutCubic,
-            );
-          }
-          if (i == 1) {
-            s.startLive();
-          } else {
-            s.stopLive();
-          }
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.grid_view_rounded),
-            label: '概览',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.account_tree_rounded),
-            label: '路由',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.donut_large_rounded),
-            label: '额度',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.dns_rounded),
-            label: '供应商',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.list_alt_rounded),
-            label: '明细',
-          ),
-        ],
+            NavigationDestination(
+              icon: Icon(Icons.account_tree_rounded),
+              label: '路由',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.donut_large_rounded),
+              label: '额度',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.dns_rounded),
+              label: '供应商',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.list_alt_rounded),
+              label: '明细',
+            ),
+          ],
+        ),
       ),
     );
   }
