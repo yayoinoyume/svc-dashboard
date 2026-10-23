@@ -188,6 +188,18 @@ journalctl -u svc-dashboard -f             # 日志
 
 用户手机经 Tailscale（CGNAT 段 `100.64.0.0/10`）访问时，页面里的服务链接主机会自动从内网 IP 切到 Tailscale IP（服务端检测客户端来源网段，前端 `linkHost()` 切换）。
 
+## Magpie 监控 App（Android）
+
+`flutter_app/` 和 `android/` 是 Magpie 网关的只读监控客户端，与本项目的服务端面板相互独立。
+
+- **Flutter 版**（主力）：五页 —— 概览、路由、额度、供应商、明细；实时流向图、输出速度、Material 3 深色主题
+- **WebView 版**（早期）：原生壳 + 内置网页，保留可用
+- 首次打开需填写网关地址与访问密钥，密钥只保存在本机
+- 构建与发布全在 GitHub Actions：推送分支出 Artifact，推送 `v*` 标签出 Release
+- 签名密钥由 1Password 下发，不落仓库
+
+完整说明见 [docs/magpie-app.md](docs/magpie-app.md)。
+
 ## 注意事项
 
 - **权限**：需免密 sudo（`sudo -n`）才能完整显示 root/其他用户服务的 PID 与命令；无 sudo 时这些服务的 PID 栏为空，其余功能不受影响
