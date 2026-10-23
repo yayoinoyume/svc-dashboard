@@ -120,7 +120,7 @@ class _PrivacyViewState extends State<PrivacyView> {
             if (asMapList(sum['agents']).isNotEmpty &&
                 asMapList(sum['providers']).isNotEmpty) ...[
               const SizedBox(height: 12),
-              _flow(sum, kinds),
+              _flow(sum),
             ],
             if (asMapList(sum['values']).isNotEmpty) ...[
               const SizedBox(height: 12),
