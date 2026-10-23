@@ -66,9 +66,10 @@ class FlowDiagram extends StatefulWidget {
 
 class _FlowDiagramState extends State<FlowDiagram>
     with SingleTickerProviderStateMixin {
+  // 一个周期 2.4 秒：光点从一端走到另一端，虚线和呼吸都跟这个周期走
   late final AnimationController _anim = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 1200),
+    duration: const Duration(milliseconds: 2400),
   );
 
   bool _reduced = false;
@@ -114,8 +115,8 @@ class _FlowDiagramState extends State<FlowDiagram>
                       clients: widget.clients,
                       targets: widget.targets,
                       links: widget.links,
-                      // 量化到 30fps，避免每帧重绘整张图
-                      phase: (_anim.value * 30).round() / 30,
+                      // 每周期 60 步（约 25 次/秒），避免每帧重绘整张图
+                      phase: (_anim.value * 60).round() / 60,
                       animate: !_reduced,
                     ),
                   ),
@@ -426,6 +427,7 @@ class _FlowPainter extends CustomPainter {
     const err = Color(0xFFE57373);
     const glow = Color(0xFFCDB8E2);
 
+    var li = 0;
     for (final l in links) {
       final a = ci[l.from];
       final b = ti[l.to];
@@ -433,14 +435,14 @@ class _FlowPainter extends CustomPainter {
 
       final y1 = lay.clientY[a];
       final y2 = lay.targetY[b];
-      final p1 = _curve(
-        Offset(lay.leftW, y1),
-        Offset(lay.hubCx - lay.hubR - 5, lay.hubCy),
-      );
-      final p2 = _curve(
-        Offset(lay.hubCx + lay.hubR + 5, lay.hubCy),
-        Offset(lay.w - lay.rightW, y2),
-      );
+      final a1 = Offset(lay.leftW, y1);
+      final b1 = Offset(lay.hubCx - lay.hubR - 5, lay.hubCy);
+      final a2 = Offset(lay.hubCx + lay.hubR + 5, lay.hubCy);
+      final b2 = Offset(lay.w - lay.rightW, y2);
+      final p1 = _curve(a1, b1);
+      final p2 = _curve(a2, b2);
+      final m1 = _firstMetric(p1);
+      final m2 = _firstMetric(p2);
 
       final color = l.err
           ? err
@@ -463,14 +465,9 @@ class _FlowPainter extends CustomPainter {
         canvas.drawPath(p2, glowPaint);
       }
 
-      final paint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round
-        ..strokeWidth = stroke
-        ..color = color;
-
-      canvas.drawPath(p1, paint);
-      canvas.drawPath(p2, paint);
+      // 激活链路用方向渐变：从节点一侧淡出，到网关一侧最亮
+      canvas.drawPath(p1, _stroke(color, stroke, a1, b1, fromHub: false));
+      canvas.drawPath(p2, _stroke(color, stroke, a2, b2, fromHub: true));
 
       if (l.live) {
         final dash = Paint()
@@ -478,11 +475,83 @@ class _FlowPainter extends CustomPainter {
           ..strokeCap = StrokeCap.round
           ..strokeWidth = 1.6
           ..color = glow;
-        final offset = animate ? phase * 12 : 0.0;
-        canvas.drawPath(_dash(p1, 3.0, 9.0, offset), dash);
-        canvas.drawPath(_dash(p2, 3.0, 9.0, offset), dash);
+        final offset = animate ? phase * 24 : 0.0;
+        if (m1 != null) canvas.drawPath(_dash(m1, 3.0, 9.0, offset), dash);
+        if (m2 != null) canvas.drawPath(_dash(m2, 3.0, 9.0, offset), dash);
+
+        if (animate) {
+          // 每条链路错开相位，光点不会齐步走
+          final seed = li * 0.31;
+          _particles(canvas, m1, color, phase + seed);
+          _particles(canvas, m2, color, phase + seed + 0.5);
+        }
       }
+      li++;
     }
+  }
+
+  /// 描边：激活/错误链路用从淡到亮（或从亮到淡）的渐变，
+  /// 空闲链路保持纯色，少建一个 shader。
+  Paint _stroke(
+    Color color,
+    double width,
+    Offset from,
+    Offset to, {
+    required bool fromHub,
+  }) {
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = width;
+
+    final faint = color.withValues(alpha: color.a * 0.12);
+    if (color.a < 0.5) {
+      return paint..color = color;
+    }
+    paint.shader = LinearGradient(
+      begin: Alignment.centerLeft,
+      end: Alignment.centerRight,
+      colors: fromHub ? [color, faint] : [faint, color],
+    ).createShader(Rect.fromPoints(from, to));
+    return paint;
+  }
+
+  /// 沿曲线移动的光点：两端淡入淡出，中间一颗实心亮点
+  void _particles(Canvas canvas, PathMetric? m, Color color, double t0) {
+    if (m == null || m.length <= 0) return;
+    const count = 2;
+    for (var k = 0; k < count; k++) {
+      final t = (t0 + k / count) % 1.0;
+      final double fade = math
+          .min(1.0, math.min(t / 0.16, (1 - t) / 0.16))
+          .clamp(0.0, 1.0)
+          .toDouble();
+      if (fade <= 0.02) continue;
+      final tan = m.getTangentForOffset(m.length * t);
+      if (tan == null) continue;
+      final pos = tan.position;
+      canvas.drawCircle(
+        pos,
+        4.5,
+        Paint()..color = color.withValues(alpha: 0.16 * fade),
+      );
+      canvas.drawCircle(
+        pos,
+        2.0,
+        Paint()..color = color.withValues(alpha: 0.85 * fade),
+      );
+      canvas.drawCircle(
+        pos,
+        1.0,
+        Paint()..color = Colors.white.withValues(alpha: 0.7 * fade),
+      );
+    }
+  }
+
+  PathMetric? _firstMetric(Path p) {
+    final it = p.computeMetrics();
+    if (it.isEmpty) return null;
+    return it.first;
   }
 
   Path _curve(Offset a, Offset b) {
@@ -492,17 +561,15 @@ class _FlowPainter extends CustomPainter {
       ..cubicTo(a.dx + dx, a.dy, b.dx - dx, b.dy, b.dx, b.dy);
   }
 
-  Path _dash(Path src, double dash, double gap, double offset) {
+  Path _dash(PathMetric m, double dash, double gap, double offset) {
     final out = Path();
-    for (final m in src.computeMetrics()) {
-      var d = offset % (dash + gap);
-      while (d < m.length) {
-        out.addPath(
-          m.extractPath(d, math.min(d + dash, m.length)),
-          Offset.zero,
-        );
-        d += dash + gap;
-      }
+    var d = offset % (dash + gap);
+    while (d < m.length) {
+      out.addPath(
+        m.extractPath(d, math.min(d + dash, m.length)),
+        Offset.zero,
+      );
+      d += dash + gap;
     }
     return out;
   }
