@@ -114,21 +114,13 @@ jobs:
           # 重跑时先删掉旧 release（标签保留）
           gh release delete "$TAG" --yes 2>/dev/null || true
 
+          NOTES="安装：下载 magpie-flutter-arm64.apk 覆盖安装；老 32 位机型用 magpie-flutter-armv7.apk。首次打开需填写网关地址和访问密钥，密钥只保存在本机。版本 ${VERSION}（构建 ${GITHUB_RUN_NUMBER}）。"
+
           gh release create "$TAG" \
             magpie-flutter-arm64.apk \
             magpie-flutter-armv7.apk \
             --title "Magpie Flutter ${VERSION}" \
-            --notes "## 安装
-
-下载 magpie-flutter-arm64.apk，直接覆盖安装；老 32 位机型用 magpie-flutter-armv7.apk。
-
-首次打开需要填写网关地址和访问密钥，密钥只保存在本机。
-
-## 版本
-
-- 版本号：${VERSION}
-- 构建号：${{ github.run_number }}
-" \
+            --notes "$NOTES" \
             --latest
 
       - name: Upload build artifact
