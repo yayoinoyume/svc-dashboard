@@ -115,11 +115,16 @@ jobs:
           # 重跑时先删掉旧 release（标签保留）
           gh release delete "$TAG" --yes 2>/dev/null || true
 
-          # 发布说明取标签注释；发版时写什么，这里就发什么
-          if git tag -l --format='%(contents)' "$TAG" > "$NOTES_FILE" && [ -s "$NOTES_FILE" ]; then
+          # 发布说明优先取仓库里的 docs/releases/<tag>.md，
+          # 其次是标签注释，最后退回默认文案。
+          REL_NOTES="docs/releases/${TAG}.md"
+          if [ -f "$REL_NOTES" ]; then
+            echo "使用 $REL_NOTES 作为发布说明"
+            cp "$REL_NOTES" "$NOTES_FILE"
+          elif git tag -l --format='%(contents)' "$TAG" > "$NOTES_FILE" && [ -s "$NOTES_FILE" ]; then
             echo "使用标签注释作为发布说明"
           else
-            echo "标签没有注释，使用默认说明"
+            echo "没有可用的更新说明，使用默认文案"
             printf '版本 %s（构建 %s）\n' "$VERSION" "$GITHUB_RUN_NUMBER" > "$NOTES_FILE"
           fi
 
