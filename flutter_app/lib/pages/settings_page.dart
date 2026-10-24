@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
 import '../store.dart';
 import '../theme.dart';
+import '../update_service.dart';
 
 class SettingsPage extends StatefulWidget {
   final AppConfig initial;
@@ -33,6 +35,61 @@ class _SettingsPageState extends State<SettingsPage> {
   String message = '';
   bool ok = false;
   bool saving = false;
+
+  // ---- 关于 / 检查更新 ----
+  String? appVersion;
+  bool checkingUpdate = false;
+  bool checkedOnce = false;
+  ReleaseInfo? newRelease;
+  String? updateError;
+
+  @override
+  void initState() {
+    super.initState();
+    UpdateService.currentVersion().then((v) {
+      if (mounted) setState(() => appVersion = v);
+    });
+  }
+
+  Future<void> _checkUpdate() async {
+    setState(() {
+      checkingUpdate = true;
+      updateError = null;
+      newRelease = null;
+    });
+    try {
+      final r = await UpdateService.check(force: true);
+      if (!mounted) return;
+      setState(() {
+        newRelease = r;
+        checkedOnce = true;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        updateError = e.toString();
+        checkedOnce = true;
+      });
+    } finally {
+      if (mounted) setState(() => checkingUpdate = false);
+    }
+  }
+
+  Future<void> _openRelease(ReleaseInfo r) async {
+    final uri = Uri.tryParse(r.url);
+    if (uri == null) return;
+    try {
+      final launched =
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched && mounted) {
+        setState(() => updateError = '打不开浏览器，请手动访问 ${r.url}');
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => updateError = '打不开浏览器，请手动访问 ${r.url}');
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -206,22 +263,108 @@ class _SettingsPageState extends State<SettingsPage> {
               color: ok ? AppColors.success : AppColors.error,
             ),
           ),
-          const SizedBox(height: 36),
-          const Center(
-            child: Column(
-              children: [
-                Text(
-                  'Magpie Flutter v1.0.0',
-                  style: TextStyle(fontSize: 10.5, color: Color(0xFF6E778F)),
+          const SizedBox(height: 32),
+          Divider(color: AppColors.outline.withValues(alpha: 0.5)),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Magpie Flutter ${appVersion ?? '…'}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      '只读监控 · 路由页实时刷新',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: Color(0xFF6E778F),
+                      ),
+                    ),
+                  ],
                 ),
-                SizedBox(height: 2),
+              ),
+              TextButton(
+                onPressed: checkingUpdate ? null : _checkUpdate,
+                child: Text(checkingUpdate ? '检查中…' : '检查更新'),
+              ),
+            ],
+          ),
+          if (updateError != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              updateError!,
+              style: const TextStyle(fontSize: 11.5, color: AppColors.error),
+            ),
+          ],
+          if (newRelease != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainer,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: AppColors.seed.withValues(alpha: 0.45),
+                  width: 0.8,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${newRelease!.version} 可用',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        const Text(
+                          '在浏览器里下载新版 APK，覆盖安装即可',
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            color: AppColors.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  FilledButton(
+                    onPressed: () => _openRelease(newRelease!),
+                    child: const Text('去下载'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (checkedOnce && newRelease == null && updateError == null) ...[
+            const SizedBox(height: 8),
+            const Row(
+              children: [
+                Icon(
+                  Icons.check_circle_outline,
+                  size: 14,
+                  color: AppColors.success,
+                ),
+                SizedBox(width: 5),
                 Text(
-                  '只读监控 · 路由页实时刷新',
-                  style: TextStyle(fontSize: 10.5, color: Color(0xFF6E778F)),
+                  '已是最新版本',
+                  style: TextStyle(fontSize: 11.5, color: AppColors.success),
                 ),
               ],
             ),
-          ),
+          ],
         ],
       ),
     );

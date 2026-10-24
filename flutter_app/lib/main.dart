@@ -8,6 +8,7 @@ import 'pages/routing_page.dart';
 import 'pages/settings_page.dart';
 import 'store.dart';
 import 'theme.dart';
+import 'update_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,6 +34,9 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
 
   late List<Widget> _pageViews = const [];
 
+  /// 有新版本时给设置齿轮加一个小红点；检查失败静默忽略
+  bool _hasUpdate = false;
+
   @override
   void initState() {
     super.initState();
@@ -43,8 +47,19 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         state?.refreshAll();
       });
+      _silentUpdateCheck();
     }
     WidgetsBinding.instance.addObserver(this);
+  }
+
+  /// 启动时静默查一次（24 小时缓存），有更新就点个小红点，不弹窗
+  Future<void> _silentUpdateCheck() async {
+    try {
+      final r = await UpdateService.check();
+      if (mounted && r != null) setState(() => _hasUpdate = true);
+    } catch (_) {
+      // 网络不通时什么都不做
+    }
   }
 
   @override
@@ -106,6 +121,7 @@ class _MagpieAppState extends State<MagpieApp> with WidgetsBindingObserver {
                   state: state!,
                   pages: _pageViews,
                   tab: _tab,
+                  hasUpdate: _hasUpdate,
                 )
               : SettingsPage(
                   initial: config,
@@ -122,12 +138,14 @@ class _HomeShell extends StatefulWidget {
   final AppState state;
   final List<Widget> pages;
   final ValueNotifier<int> tab;
+  final bool hasUpdate;
 
   const _HomeShell({
     super.key,
     required this.state,
     required this.pages,
     required this.tab,
+    required this.hasUpdate,
   });
 
   @override
@@ -247,10 +265,13 @@ class _HomeShellState extends State<_HomeShell> {
             },
             icon: const Icon(Icons.refresh_rounded, size: 21),
           ),
-          IconButton(
-            tooltip: '设置',
-            onPressed: _openSettings,
-            icon: const Icon(Icons.settings_outlined, size: 21),
+          Badge(
+            isLabelVisible: widget.hasUpdate,
+            child: IconButton(
+              tooltip: '设置',
+              onPressed: _openSettings,
+              icon: const Icon(Icons.settings_outlined, size: 21),
+            ),
           ),
           const SizedBox(width: 4),
         ],

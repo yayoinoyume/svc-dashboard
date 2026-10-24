@@ -24,6 +24,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # 开发包要读最近一个正式标签做版本号
+          fetch-depth: 0
 
       - name: Load signing material
         uses: 1password/load-secrets-action@v2
@@ -62,6 +65,21 @@ jobs:
           # 用 1Password 里的正式签名密钥，不再使用仓库内的 debug keystore
           echo "$KEYSTORE_B64" | base64 -d > /tmp/magpie-release.p12
           python3 .github/scripts/configure-signing.py /tmp/magpie_host
+
+      - name: Resolve base version
+        id: basever
+        run: |
+          # 开发包沿用最近一个正式标签的版本号，
+          # 否则 app 里的检查更新会永远认为有新版本
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "基于 ${TAG}"
+
+      - name: Stamp version
+        working-directory: /tmp/magpie_host
+        run: |
+          sed -i "s/^version: .*/version: ${{ steps.basever.outputs.version }}+${{ github.run_number }}/" pubspec.yaml
+          grep '^version:' pubspec.yaml
 
       - name: Install dependencies
         working-directory: /tmp/magpie_host
