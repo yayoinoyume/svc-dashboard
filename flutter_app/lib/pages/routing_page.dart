@@ -8,11 +8,33 @@ import '../util.dart';
 import '../widgets.dart';
 import '../widgets/flow_diagram.dart';
 
-const _agentStyles = <String, (String, Color)>{
-  'pi': ('Pi', Color(0xFF9B7BB8)),
-  'claude': ('Claude Code', Color(0xFF7FA6C9)),
-  'other': ('其他客户端', Color(0xFF8E9BB3)),
-};
+/// 客户端 ID 原样显示：magpie 上报什么就显示什么，不做翻译或别名。
+/// 这里只负责配色——同一个名字永远同一个颜色，没见过的按稳定哈希取。
+const _agentPalette = <Color>[
+  Color(0xFF9B7BB8),
+  Color(0xFF7FA6C9),
+  Color(0xFF7BC9A6),
+  Color(0xFFD9B36C),
+  Color(0xFFE57373),
+  Color(0xFFA0D2EB),
+  Color(0xFFC3A6E0),
+];
+
+String _agentKey(Map<String, dynamic> r) {
+  final a = (r['agent'] ?? '').toString().trim();
+  return a.isEmpty ? 'other' : a;
+}
+
+String _agentName(Map<String, dynamic> r) => _agentKey(r);
+
+Color _agentColorOf(String key) {
+  if (key == 'other') return const Color(0xFF8E9BB3);
+  var h = 0;
+  for (final c in key.codeUnits) {
+    h = (h * 31 + c) & 0x7fffffff;
+  }
+  return _agentPalette[h % _agentPalette.length];
+}
 
 const _running = Color(0xFF9B7BB8);
 const _done = Color(0xFF7BC9A6);
@@ -29,14 +51,6 @@ Color _dotColor(String state) {
       return _done;
   }
 }
-
-String _agentKey(Map<String, dynamic> r) {
-  final a = (r['agent'] ?? 'other').toString();
-  return _agentStyles.containsKey(a) ? a : 'other';
-}
-
-String _agentName(Map<String, dynamic> r) => _agentStyles[_agentKey(r)]!.$1;
-Color _agentColor(Map<String, dynamic> r) => _agentStyles[_agentKey(r)]!.$2;
 
 String _modelShort(dynamic m) {
   final s = (m ?? '').toString();
@@ -218,9 +232,9 @@ class _Model {
       for (final k in clientKeys)
         FlowNode(
           key: k,
-          label: _agentStyles[k]!.$1,
+          label: k,
           sub: '${cm[k]!.count} 次 · ${cm[k]!.convs.length} 会话',
-          dot: _agentStyles[k]!.$2,
+          dot: _agentColorOf(k),
           count: cm[k]!.count,
           live: cm[k]!.live > 0,
           err: cm[k]!.err > 0,
@@ -248,7 +262,8 @@ class _Model {
 
     final links = <FlowLink>[];
     for (final e in em.entries) {
-      final sep = e.key.indexOf('|');
+      // agent 名是上游原样给的，可能含 |；目标 key 受控，从右侧找分隔符
+      final sep = e.key.lastIndexOf('|');
       final from = e.key.substring(0, sep);
       final to = e.key.substring(sep + 1);
       if (!activeClients.contains(from) || !activeTargets.contains(to)) {
@@ -292,6 +307,10 @@ class _RoutingPageState extends State<RoutingPage> {
   final Set<String> expanded = {};
   bool showAll = false;
 
+  /// 流向图默认只画请求最多的 3 个客户端，其余合并成一行
+  bool _clientsExpanded = false;
+  static const _clientLimit = 3;
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<int>(
@@ -332,6 +351,37 @@ class _RoutingPageState extends State<RoutingPage> {
     final filtered = _filtered(routes);
     final shown = showAll ? filtered : filtered.take(12).toList();
 
+    // 默认只画前 3 个客户端，"其他 N 种"合成一行；N 是实际剩余数量
+    final allClients = model.clients;
+    final hidden = allClients.length - _clientLimit;
+    final folded = hidden > 0 && !_clientsExpanded;
+    final visibleClients =
+        _clientsExpanded ? allClients : allClients.take(_clientLimit).toList();
+    final foldedCount = folded
+        ? allClients.skip(_clientLimit).fold<int>(0, (a, c) => a + c.count)
+        : 0;
+    final diagramClients = <FlowNode>[
+      ...visibleClients,
+      if (folded)
+        FlowNode(
+          key: '__more',
+          label: '其他 $hidden 种',
+          sub: '合计 $foldedCount 次',
+          dot: const Color(0xFF9B7BB8),
+          count: foldedCount,
+          hubOnly: true,
+        ),
+    ];
+    final visibleKeys = diagramClients.map((c) => c.key).toSet();
+    final diagramLinks = model.links
+        .where((l) => visibleKeys.contains(l.from))
+        .toList();
+    // 只保留仍有可见入线的目标，避免折叠后出现没有任何连线的孤点
+    final linkedTargets = diagramLinks.map((l) => l.to).toSet();
+    final diagramTargets = model.targets
+        .where((t) => linkedTargets.contains(t.key))
+        .toList();
+
     return [
       StatStrip(
         items: [
@@ -362,12 +412,14 @@ class _RoutingPageState extends State<RoutingPage> {
                           ),
                         ),
                         const SizedBox(height: 2),
+                        // 目标与流向按图上实际画的算，折叠时不会出现
+                        // "写了 4 个目标、只画 2 个"的错位
                         Text(
                           model.clients.isEmpty
                               ? '当前没有活跃请求'
                               : '${model.clients.length} 个客户端 · '
-                                  '${model.targets.length} 个目标 · '
-                                  '${model.links.length} 条流向',
+                                  '${diagramTargets.length} 个目标 · '
+                                  '${diagramLinks.length} 条流向',
                           style: const TextStyle(
                             fontSize: 10,
                             color: Color(0xFF6E778F),
@@ -376,6 +428,37 @@ class _RoutingPageState extends State<RoutingPage> {
                       ],
                     ),
                   ),
+                  if (allClients.length > _clientLimit) ...[
+                    GestureDetector(
+                      onTap: () => setState(
+                        () => _clientsExpanded = !_clientsExpanded,
+                      ),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceContainer,
+                          borderRadius: BorderRadius.circular(99),
+                          border: Border.all(
+                            color: AppColors.outline,
+                            width: 0.8,
+                          ),
+                        ),
+                        child: Text(
+                          _clientsExpanded
+                              ? '收起'
+                              : '展开 ${allClients.length} 种',
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: AppColors.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
                   LiveDot(ok: widget.state.liveOk),
                 ],
               ),
@@ -387,9 +470,9 @@ class _RoutingPageState extends State<RoutingPage> {
                 )
               else
                 FlowDiagram(
-                  clients: model.clients,
-                  targets: model.targets,
-                  links: model.links,
+                  clients: diagramClients,
+                  targets: diagramTargets,
+                  links: diagramLinks,
                   selectedKey: selectedKey,
                   onTap: _onNodeTap,
                 ),

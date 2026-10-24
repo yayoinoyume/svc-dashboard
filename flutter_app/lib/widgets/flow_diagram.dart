@@ -15,6 +15,9 @@ class FlowNode {
   final bool live;
   final bool err;
 
+  /// 合并项（"其他 N 种"）：只连到网关，没有具体目标，也不可点选
+  final bool hubOnly;
+
   const FlowNode({
     required this.key,
     required this.label,
@@ -23,6 +26,7 @@ class FlowNode {
     required this.count,
     this.live = false,
     this.err = false,
+    this.hubOnly = false,
   });
 }
 
@@ -176,16 +180,25 @@ class _FlowDiagramState extends State<FlowDiagram>
         ),
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: () => widget.onTap(node, isClient),
+          // 合并项是"其他 N 种"的汇总，点它没有可筛选的单一客户端
+          onTap: node.hubOnly ? null : () => widget.onTap(node, isClient),
           child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
           padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
           decoration: BoxDecoration(
-            color: selected ? AppColors.surfaceHigh : AppColors.surfaceLow,
+            color: node.hubOnly
+                ? AppColors.seed.withValues(alpha: 0.10)
+                : selected
+                    ? AppColors.surfaceHigh
+                    : AppColors.surfaceLow,
             borderRadius: BorderRadius.circular(13),
             border: Border.all(
-              color: selected ? AppColors.seed : AppColors.outline,
-              width: selected ? 1.2 : 0.8,
+              color: node.hubOnly
+                  ? AppColors.seed.withValues(alpha: 0.55)
+                  : selected
+                      ? AppColors.seed
+                      : AppColors.outline,
+              width: selected || node.hubOnly ? 1.2 : 0.8,
             ),
           ),
           child: Column(
@@ -241,10 +254,11 @@ class _FlowDiagramState extends State<FlowDiagram>
                       node.label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w600,
                         height: 1.15,
+                        color: node.hubOnly ? const Color(0xFFC9AEE2) : null,
                       ),
                     ),
                   ),
@@ -368,7 +382,10 @@ class _Layout {
 
   static _Layout compute(double w, int nc, int nt) {
     final width = w <= 0 ? 338.0 : w;
-    final h = (width * 0.633).clamp(190.0, 232.0).toDouble();
+    // 高度跟着节点数长，否则节点超过 6 个时会被压扁、间距变负而重叠
+    final rows = math.max(nc, nt);
+    final baseH = (width * 0.633).clamp(190.0, 232.0).toDouble();
+    final h = math.max(baseH, rows * 44.0 + 24.0);
     final sc = _spread(nc, h);
     final st = _spread(nt, h);
     return _Layout(
@@ -386,12 +403,14 @@ class _Layout {
     );
   }
 
+  /// 节点高 40、行距 44（留 4px 间隙），整体垂直居中；
+  /// 高度已按节点数算好，不会互相挤压
   static (List<double>, double) _spread(int n, double h) {
     if (n <= 0) return (<double>[], 0.0);
-    final nh = math.min(46.0, math.max(30.0, (h - (n + 1) * 10) / n));
-    final gap = (h - n * nh) / (n + 1);
+    const nh = 40.0;
+    const step = 44.0;
     return (
-      List<double>.generate(n, (i) => gap + nh / 2 + i * (nh + gap)),
+      List<double>.generate(n, (i) => h / 2 + (i - (n - 1) / 2) * step),
       nh,
     );
   }
@@ -489,6 +508,23 @@ class _FlowPainter extends CustomPainter {
         }
       }
       li++;
+    }
+
+    // 合并项（"其他 N 种"）只连到网关：它代表多个客户端，没有具体目标
+    for (final c in clients) {
+      if (!c.hubOnly) continue;
+      final idx = ci[c.key];
+      if (idx == null) continue;
+      final p = _curve(
+        Offset(lay.leftW, lay.clientY[idx]),
+        Offset(lay.hubCx - lay.hubR - 5, lay.hubCy),
+      );
+      final w =
+          1.0 + math.min(1.8, math.log(c.count + 1) / math.ln2 * 0.34);
+      canvas.drawPath(
+        p,
+        _stroke(live.withValues(alpha: 0.55), w),
+      );
     }
   }
 
