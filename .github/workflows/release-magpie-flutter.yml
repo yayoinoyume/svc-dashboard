@@ -110,17 +110,26 @@ jobs:
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
           VERSION="${{ steps.ver.outputs.version }}"
+          NOTES_FILE=/tmp/release-notes.md
 
           # 重跑时先删掉旧 release（标签保留）
           gh release delete "$TAG" --yes 2>/dev/null || true
 
-          NOTES="安装：下载 magpie-flutter-arm64.apk 覆盖安装；老 32 位机型用 magpie-flutter-armv7.apk。首次打开需填写网关地址和访问密钥，密钥只保存在本机。版本 ${VERSION}（构建 ${GITHUB_RUN_NUMBER}）。"
+          # 发布说明取标签注释；发版时写什么，这里就发什么
+          if git tag -l --format='%(contents)' "$TAG" > "$NOTES_FILE" && [ -s "$NOTES_FILE" ]; then
+            echo "使用标签注释作为发布说明"
+          else
+            echo "标签没有注释，使用默认说明"
+            printf '版本 %s（构建 %s）\n' "$VERSION" "$GITHUB_RUN_NUMBER" > "$NOTES_FILE"
+          fi
+
+          printf '\n---\n\n**安装**：下载 `magpie-flutter-arm64.apk` 覆盖安装；老 32 位机型用 `magpie-flutter-armv7.apk`。首次打开需填写网关地址和访问密钥，密钥只保存在本机。\n' >> "$NOTES_FILE"
 
           gh release create "$TAG" \
             magpie-flutter-arm64.apk \
             magpie-flutter-armv7.apk \
             --title "Magpie Flutter ${VERSION}" \
-            --notes "$NOTES" \
+            --notes-file "$NOTES_FILE" \
             --latest
 
       - name: Upload build artifact
