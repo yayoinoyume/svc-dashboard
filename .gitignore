@@ -6,3 +6,4 @@ dashboard.py.bak-*
 screenshots/
 docs/screenshots/
 .hermes/
+.playwright-mcp/

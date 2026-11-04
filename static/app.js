@@ -8,9 +8,11 @@ const AUTO = BOOT.auto;
 const LANG = BOOT.lang;
 const LOCALE_TAG = { zh: "zh-CN", en: "en-US", ja: "ja-JP" }[LANG] || undefined;
 const TS_MODE = BOOT.tsMode;
-const TS_HOST = "100.76.219.104";
-const LAN_HOST = "192.168.3.82";
-const linkHost = (h) => (TS_MODE && (h === "192.168.3.82")) ? TS_HOST : h;  // 来源为 tailscale(100.64.0.0/10) 时链接主机改用 tailscale IP
+// 主机地址一律来自 BOOT.tl（静态导出时已脱敏），源码里不再硬编码内网/Tailscale IP。
+const TL_BOOT_HOSTS = (BOOT.tl && BOOT.tl.hosts) || {};
+const TS_HOST = TL_BOOT_HOSTS.tailscale || "";
+const LAN_HOST = TL_BOOT_HOSTS.lan || "";
+const linkHost = (h) => (TS_MODE && LAN_HOST && h === LAN_HOST) ? TS_HOST : h;  // 来源为 tailscale(100.64.0.0/10) 时链接主机改用 tailscale IP
 const getMagpieUrl = () => {
   const isTs = (window.__BOOT__ && window.__BOOT__.tsMode) ||
                (typeof TS_MODE !== "undefined" && TS_MODE) ||
@@ -118,6 +120,9 @@ function esHtml(ico, title) {
 let autoOn = true;           // 自动刷新总开关(旧版遗留: false 且无处置 true, 整条轮询链路死代码;
                               // 首页资源磁贴需要活数据 → 默认开。桌面 10s/移动 30s/后台停/长按锁定停)
 let autoLocked = false;      // 长按锁定: true = 30s 自动刷新完全停止
+// TaskHub 状态容器：必须早于任何 setCat()/init 逻辑声明，否则 TDZ 报错。
+const TH = { tab: "events", mode: "open", q: "", issues: null, runs: null,
+             hosts: null, health: null, logId: null, timer: null, sheet: null };
 let filter = "user"; // 默认只显示用户服务, 隐藏系统服务
 let services = [];
 const $ = (id) => document.getElementById(id);
@@ -496,8 +501,15 @@ function renderToolchips() {
   const ports = new Set(services.filter(s => !s.paused).map(s => s.port));   // 暂停服务不显示
   let chips = TOOL_LINKS.filter(([n, p]) => ports.has(p)).map(([n, p]) =>
     `<a class='chip tchip' href='http://${linkHost(location.hostname)}:${p}/' target='_blank' rel='noopener'>${n} :${p} ${icon("ext", 11)}</a>`).join("");
-  if (!BOOT.static && ports.has(3426)) {
-    chips = `<a class='chip tchip magpie-chip' style='color:#c084fc;border-color:rgba(168,85,247,0.35);background:rgba(168,85,247,0.08);' href='${escAttr(getMagpieUrl())}' target='_blank' rel='noopener'>Magpie ${icon("ext", 11)}</a>` + chips;
+  if (!BOOT.static) {
+    const remote = "https://debian.tailb4776a.ts.net";
+    const vnc = [];
+    if (ports.has(6080)) vnc.push(`<a class='chip tchip' href='${remote}/xfce/vnc.html?autoconnect=1&resize=scale' target='_blank' rel='noopener'>XFCE VNC ${icon("ext", 11)}</a>`);
+    if (ports.has(6082)) vnc.push(`<a class='chip tchip' href='${remote}:8449/vnc.html?autoconnect=1&resize=scale' target='_blank' rel='noopener'>Hyprland VNC ${icon("ext", 11)}</a>`);
+    if (ports.has(3426)) {
+      vnc.unshift(`<a class='chip tchip magpie-chip' style='color:#c084fc;border-color:rgba(168,85,247,0.35);background:rgba(168,85,247,0.08);' href='${escAttr(getMagpieUrl())}' target='_blank' rel='noopener'>Magpie ${icon("ext", 11)}</a>`);
+    }
+    chips = vnc.join("") + chips;
   }
   el.innerHTML = chips;
   el.hidden = !chips;
@@ -1231,6 +1243,7 @@ async function load(alsoSys) {
       if (BOOT.static) {
         if (BOOT.apiData) applyApiData(BOOT.apiData);
         if (alsoSys && BOOT.sysData) renderSys(BOOT.sysData);
+        if (BOOT.vmsData) renderVms(BOOT.vmsData);
         return;
       }
       ompCache = null; tasksCache = null; tmuxCache = null; // 手动刷新清面板缓存,拿到最新 agent/tmux/任务状态
@@ -1249,6 +1262,7 @@ async function load(alsoSys) {
       if (alsoSys) {
         const ss = snapGet("sys");
         if (ss && ss.data) { try { renderSys(ss.data); } catch (e) {} }
+        loadVms(true);
         try {
           const r = await fetch("/api/sys", { cache: "no-store" });
           const d = await r.json();
@@ -1618,6 +1632,600 @@ async function renderPortalAgent() {
 
 
 
+// --- PVE 虚拟机状态面板 (Windows11 / DEBIAN) ---
+let vmsCache = { t: 0, data: null };
+async function loadVms(force) {
+  if (BOOT.static && BOOT.vmsData) {
+    vmsCache.data = BOOT.vmsData;
+    vmsCache.t = Date.now();
+    renderVms(BOOT.vmsData);
+    return BOOT.vmsData;
+  }
+  const now = Date.now();
+  if (!force && vmsCache.data && now - vmsCache.t < 15000) {
+    renderVms(vmsCache.data);
+    return vmsCache.data;
+  }
+  const snap = snapGet("vms");
+  if (!force && snap && snap.data && !vmsCache.data) {
+    vmsCache = { t: now, data: snap.data };
+    renderVms(snap.data);
+  }
+  try {
+    const r = await fetch("/api/vms", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    vmsCache = { t: Date.now(), data: d };
+    snapSet("vms", { data: d });
+    renderVms(d);
+    return d;
+  } catch (err) {
+    if (!snap) console.error("vms load failed", err);
+    return vmsCache.data;
+  }
+}
+
+function fmtGib(b) {
+  if (!b || b <= 0) return "0 B";
+  const gib = b / 1073741824;
+  if (gib >= 1) return gib.toFixed(2) + " GiB";
+  const mib = b / 1048576;
+  if (mib >= 1) return mib.toFixed(2) + " MiB";
+  return b + " B";
+}
+
+function fmtUptimeLang(sec) {
+  if (!sec || sec <= 0) return "";
+  const days = Math.floor(sec / 86400);
+  const rem = sec % 86400;
+  const hours = String(Math.floor(rem / 3600)).padStart(2, "0");
+  const mins = String(Math.floor((rem % 3600) / 60)).padStart(2, "0");
+  const secs = String(rem % 60).padStart(2, "0");
+  if (days > 0) {
+    return t("vm_uptime_days", { d: days, h: hours, m: mins, s: secs });
+  }
+  return `${hours}:${mins}:${secs}`;
+}
+
+function renderVms(d) {
+  const el = $("hp-vms-grid");
+  if (!el) return;
+  const list = (d && d.vms) || [];
+  if (!list.length) {
+    if (d && d.error) {
+      el.innerHTML = `<div class="gempty" style="grid-column:1/-1;">${escHtml(d.error)}</div>`;
+    }
+    return;
+  }
+
+  el.innerHTML = list.map(v => {
+    const isRun = v.status === "running";
+    const upStr = isRun && v.uptime ? `(${t("vm_uptime_prefix")}: ${fmtUptimeLang(v.uptime)})` : "";
+    const cpuPct = Number(v.cpu_usage || 0).toFixed(2);
+    const memPct = Number(v.mem_percent || 0).toFixed(2);
+    const cpuStr = `${cpuPct}% of ${v.cpus || 1} CPUs`;
+    const memStr = t("vm_mem_of", { pct: memPct, total: fmtGib(v.mem_total), used: fmtGib(v.mem_used) });
+    const memHostStr = fmtGib(v.mem_host);
+    const diskStr = fmtGib(v.boot_disk);
+    const haStr = (!v.ha || v.ha === "none") ? t("vm_ha_none") : (v.ha || t("vm_ha_none"));
+
+    // CPU bar & Mem bar
+    const memFillCls = v.mem_percent > 90 ? " bad" : v.mem_percent >= 75 ? " warn" : "";
+
+    // IPs
+    let ipsHtml = "";
+    if (v.ips && v.ips.length) {
+      ipsHtml = `<div class="hp-vm-ips-wrap">` + v.ips.map(ip => {
+        return `<span class="hp-vm-ip-tag" title="${escAttr(ip)}">${escHtml(ip)}</span>`;
+      }).join("") + `</div>`;
+    } else {
+      ipsHtml = `<span class="hp-vm-v" style="color:var(--text-muted);font-weight:400;">${escHtml(t("vm_no_agent"))}</span>`;
+    }
+
+    const pveLink = linkHost(v.pve_url || "");
+
+    return `<div class="gpanel hp-vm-card" id="hp-vm-${escAttr(v.vmid)}" data-vmid="${escAttr(v.vmid)}" role="button" tabindex="0">
+      <div class="hp-vm-head">
+        <div class="hp-vm-title-wrap">
+          <span class="hp-vm-ico ${isRun ? "running" : "stopped"}">${icon("server", 15)}</span>
+          <span class="hp-vm-name">${escHtml(v.name)}</span>
+          ${upStr ? `<span class="hp-vm-uptime">${escHtml(upStr)}</span>` : ""}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="hp-vm-status-badge ${isRun ? "running" : "stopped"}">
+            ${icon("dot", 8)} ${isRun ? "running" : "stopped"}
+          </span>
+          <span class="hp-vm-link" data-openvm="${escAttr(v.vmid)}" title="${escAttr(t("vmd_title"))}">
+            ${escHtml(t("al_detail"))} ${icon("chev", 11)}
+          </span>
+        </div>
+      </div>
+      <div class="hp-vm-rows">
+        <div class="hp-vm-row">
+          <div class="hp-vm-row-kv">
+            <span class="hp-vm-k">${icon("doc", 13)} ${escHtml(t("vm_status"))}</span>
+            <span class="hp-vm-v">${isRun ? "running" : "stopped"}</span>
+          </div>
+        </div>
+        <div class="hp-vm-row">
+          <div class="hp-vm-row-kv">
+            <span class="hp-vm-k">${icon("heart", 13)} ${escHtml(t("vm_ha"))}</span>
+            <span class="hp-vm-v">${escHtml(haStr)}</span>
+          </div>
+        </div>
+        <div class="hp-vm-row">
+          <div class="hp-vm-row-kv">
+            <span class="hp-vm-k">${icon("box", 13)} ${escHtml(t("vm_node"))}</span>
+            <span class="hp-vm-v">${escHtml(v.node || "pve")}</span>
+          </div>
+        </div>
+        <div class="hp-vm-row">
+          <div class="hp-vm-row-kv">
+            <span class="hp-vm-k">${icon("cpu", 13)} ${escHtml(t("vm_cpu"))}</span>
+            <span class="hp-vm-v">${escHtml(cpuStr)}</span>
+          </div>
+          <div class="hp-vm-bar-track">
+            <div class="hp-vm-bar-fill cpu" style="width:${Math.min(Math.max(v.cpu_usage || 0, isRun ? 1 : 0), 100)}%;"></div>
+          </div>
+        </div>
+        <div class="hp-vm-row">
+          <div class="hp-vm-row-kv">
+            <span class="hp-vm-k">${icon("mem", 13)} ${escHtml(t("vm_mem"))}</span>
+            <span class="hp-vm-v">${escHtml(memStr)}</span>
+          </div>
+          <div class="hp-vm-bar-track">
+            <div class="hp-vm-bar-fill mem${memFillCls}" style="width:${Math.min(Math.max(v.mem_percent || 0, isRun ? 1 : 0), 100)}%;"></div>
+          </div>
+        </div>
+        <div class="hp-vm-row">
+          <div class="hp-vm-row-kv">
+            <span class="hp-vm-k">${icon("mem", 13)} ${escHtml(t("vm_host_mem"))}</span>
+            <span class="hp-vm-v">${escHtml(memHostStr)}</span>
+          </div>
+        </div>
+        <div class="hp-vm-row">
+          <div class="hp-vm-row-kv">
+            <span class="hp-vm-k">${icon("disk", 13)} ${escHtml(t("vm_boot_disk"))}</span>
+            <span class="hp-vm-v">${escHtml(diskStr)}</span>
+          </div>
+        </div>
+        <div class="hp-vm-row">
+          <div class="hp-vm-row-kv" style="align-items:flex-start;">
+            <span class="hp-vm-k" style="margin-top:2px;">${icon("network", 13)} ${escHtml(t("vm_ips"))}</span>
+            ${ipsHtml}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// --- PVE 虚拟机详情全屏浮层 (VM Details Sheet) ---
+let curVmDetailId = null;
+let curVmTab = "summary";
+let vmDetailCache = {};
+
+function makeVmAreaChart(points, valKey, color, gradId, maxScale, isBytes) {
+  if (!points || !points.length) {
+    return `<div class="gempty" style="height:120px;display:flex;align-items:center;justify-content:center;">${escHtml(t("es_sub"))}</div>`;
+  }
+  const vals = points.map(p => Number(p[valKey]) || 0);
+  const maxV = Math.max(...vals, maxScale || 1);
+  const W = 500, H = 130, padTop = 15, padBottom = 22, padLeft = 45, padRight = 12;
+  const plotW = W - padLeft - padRight;
+  const plotH = H - padTop - padBottom;
+
+  const pts = points.map((p, i) => {
+    const x = padLeft + (i / Math.max(points.length - 1, 1)) * plotW;
+    const v = Number(p[valKey]) || 0;
+    const y = padTop + plotH - (maxV > 0 ? (v / maxV) * plotH : 0);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+
+  const polylinePts = pts.join(" ");
+  const polygonPts = `${padLeft},${H - padBottom} ` + polylinePts + ` ${W - padRight},${H - padBottom}`;
+
+  const fmtTime = (ts) => ts ? new Date(ts * 1000).toTimeString().slice(0, 5) : "";
+  const tStart = fmtTime(points[0].time);
+  const tMid = fmtTime(points[Math.floor(points.length / 2)].time);
+  const tEnd = fmtTime(points[points.length - 1].time);
+
+  const fmtAxis = (v) => {
+    if (isBytes) {
+      if (v >= 1073741824) return (v / 1073741824).toFixed(1) + "G";
+      if (v >= 1048576) return (v / 1048576).toFixed(0) + "M";
+      if (v >= 1024) return (v / 1024).toFixed(0) + "K";
+      return Math.round(v);
+    }
+    return Math.round(v) + (maxScale === 100 ? "%" : "");
+  };
+
+  return `
+    <svg class="vmd-svg-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${color}" stop-opacity="0.45"/>
+          <stop offset="100%" stop-color="${color}" stop-opacity="0.02"/>
+        </linearGradient>
+      </defs>
+      <line x1="${padLeft}" y1="${padTop}" x2="${W - padRight}" y2="${padTop}" stroke="rgba(255,255,255,0.06)" stroke-width="1" />
+      <line x1="${padLeft}" y1="${padTop + plotH / 2}" x2="${W - padRight}" y2="${padTop + plotH / 2}" stroke="rgba(255,255,255,0.06)" stroke-width="1" stroke-dasharray="3,3" />
+      <line x1="${padLeft}" y1="${H - padBottom}" x2="${W - padRight}" y2="${H - padBottom}" stroke="rgba(255,255,255,0.12)" stroke-width="1" />
+
+      <text x="${padLeft - 6}" y="${padTop + 4}" font-size="9" fill="rgba(255,255,255,0.4)" text-anchor="end" font-family="monospace">${fmtAxis(maxV)}</text>
+      <text x="${padLeft - 6}" y="${H - padBottom}" font-size="9" fill="rgba(255,255,255,0.4)" text-anchor="end" font-family="monospace">0</text>
+
+      <polygon fill="url(#${gradId})" points="${polygonPts}" />
+      <polyline fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" points="${polylinePts}" />
+
+      <text x="${padLeft}" y="${H - 6}" font-size="9" fill="rgba(255,255,255,0.45)" font-family="monospace">${tStart}</text>
+      <text x="${padLeft + plotW / 2}" y="${H - 6}" font-size="9" fill="rgba(255,255,255,0.45)" text-anchor="middle" font-family="monospace">${tMid}</text>
+      <text x="${W - padRight}" y="${H - 6}" font-size="9" fill="rgba(255,255,255,0.45)" text-anchor="end" font-family="monospace">${tEnd}</text>
+    </svg>
+  `;
+}
+
+function renderVmDetailHeader(v) {
+  const isRun = v.status === "running";
+  const title = $("vm-sheet-title");
+  const sub = $("vm-sheet-sub");
+  const badge = $("vm-sheet-badge");
+  const ico = $("vm-sheet-ico");
+  const pveLink = $("vm-sheet-pve-link");
+
+  if (title) title.textContent = v.name || ("VM-" + v.vmid);
+  if (sub) sub.textContent = `${v.node || "pve"} · qemu/${v.vmid}` + (isRun && v.uptime ? ` · ${t("vm_uptime_prefix")}: ${fmtUptimeLang(v.uptime)}` : "");
+  if (badge) {
+    badge.className = "hp-vm-status-badge " + (isRun ? "running" : "stopped");
+    badge.innerHTML = `${icon("dot", 8)} ${isRun ? "running" : "stopped"}`;
+  }
+  if (ico) {
+    ico.className = "hp-vm-ico " + (isRun ? "running" : "stopped");
+  }
+  if (pveLink) {
+    pveLink.href = linkHost(v.pve_url || "");
+  }
+}
+
+function renderVmDetailTab(d, tab) {
+  const body = $("vm-sheet-body");
+  if (!body) return;
+  const isRun = d.status === "running";
+  const hw = d.hardware || {};
+  const opt = d.options || {};
+  const rrd = d.rrd || [];
+  const latestRrd = rrd.length ? rrd[rrd.length - 1] : {};
+
+  if (tab === "summary") {
+    const cpuChartSvg = makeVmAreaChart(rrd, "cpu", "#38bdf8", "grad-cpu-vmd", 100, false);
+    const memChartSvg = makeVmAreaChart(rrd, "mem", "#22c55e", "grad-mem-vmd", d.mem_total || (hw.memory_mb * 1048576), true);
+
+    const ipsHtml = (d.ips && d.ips.length)
+      ? d.ips.map(ip => `<span class="hp-vm-ip-tag" title="${escAttr(ip)}">${escHtml(ip)}</span>`).join(" ")
+      : `<span style="color:var(--text-muted);">${escHtml(t("vm_no_agent"))}</span>`;
+
+    body.innerHTML = `
+      <div class="vmd-metrics-grid">
+        <div class="vmd-kpi">
+          <span class="vmd-kpi-lbl">${icon("cpu", 13)} ${escHtml(t("vm_cpu"))}</span>
+          <span class="vmd-kpi-val">${Number(d.cpu_usage || 0).toFixed(2)}%</span>
+          <span class="vmd-kpi-sub">${d.cpus || hw.cores || 1} Cores · ${escHtml(hw.cpu_type || "kvm64")}</span>
+        </div>
+        <div class="vmd-kpi">
+          <span class="vmd-kpi-lbl">${icon("mem", 13)} ${escHtml(t("vm_mem"))}</span>
+          <span class="vmd-kpi-val">${fmtGib(d.mem_used)}</span>
+          <span class="vmd-kpi-sub">${fmtGib(d.mem_total)}</span>
+        </div>
+        <div class="vmd-kpi">
+          <span class="vmd-kpi-lbl">${icon("disk", 13)} ${escHtml(t("vm_boot_disk"))}</span>
+          <span class="vmd-kpi-val">${fmtGib(d.boot_disk)}</span>
+          <span class="vmd-kpi-sub">${escHtml(d.node || "pve")}</span>
+        </div>
+        <div class="vmd-kpi">
+          <span class="vmd-kpi-lbl">${icon("network", 13)} ${escHtml(t("vm_ips"))}</span>
+          <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">${ipsHtml}</div>
+        </div>
+      </div>
+
+      <div class="vmd-charts-grid">
+        <div class="vmd-chart-card">
+          <div class="vmd-chart-head">
+            <span class="vmd-chart-title">${icon("cpu", 14)} ${escHtml(t("vmd_chart_cpu"))}</span>
+            <span class="vmd-chart-badge">${Number(d.cpu_usage || 0).toFixed(1)}%</span>
+          </div>
+          <div class="vmd-chart-box">${cpuChartSvg}</div>
+        </div>
+        <div class="vmd-chart-card">
+          <div class="vmd-chart-head">
+            <span class="vmd-chart-title">${icon("mem", 14)} ${escHtml(t("vmd_chart_mem"))}</span>
+            <span class="vmd-chart-badge">${fmtGib(d.mem_used)}</span>
+          </div>
+          <div class="vmd-chart-box">${memChartSvg}</div>
+        </div>
+      </div>
+
+      <div class="vmd-table-card">
+        <h3>${icon("activity", 15)} ${escHtml(t("vmd_chart_io"))}</h3>
+        <div class="vmd-kv-list">
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">${escHtml(t("vmd_net_in"))} / ${escHtml(t("vmd_net_out"))}</span>
+            <span class="vmd-kv-v">${fmtGib(latestRrd.netin || 0)}/s · ${fmtGib(latestRrd.netout || 0)}/s</span>
+          </div>
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">${escHtml(t("vmd_disk_read"))} / ${escHtml(t("vmd_disk_write"))}</span>
+            <span class="vmd-kv-v">${fmtGib(latestRrd.diskread || 0)}/s · ${fmtGib(latestRrd.diskwrite || 0)}/s</span>
+          </div>
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">${escHtml(t("vm_host_mem"))}</span>
+            <span class="vmd-kv-v">${fmtGib(d.mem_host)}</span>
+          </div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if (tab === "hardware") {
+    const disksHtml = (hw.disks || []).map(dk => `
+      <div class="vmd-kv-item">
+        <span class="vmd-kv-k" style="font-family:var(--font-mono);font-weight:600;color:#38bdf8;">${escHtml(dk.key)}</span>
+        <span class="vmd-kv-v">${escHtml(dk.value)}</span>
+      </div>
+    `).join("") || `<div class="gempty">${escHtml(t("es_sub"))}</div>`;
+
+    const nicsHtml = (hw.nics || []).map(nc => `
+      <div class="vmd-kv-item">
+        <span class="vmd-kv-k" style="font-family:var(--font-mono);font-weight:600;color:#4ade80;">${escHtml(nc.key)}</span>
+        <span class="vmd-kv-v">${escHtml(nc.value)}</span>
+      </div>
+    `).join("") || `<div class="gempty">${escHtml(t("es_sub"))}</div>`;
+
+    body.innerHTML = `
+      <div class="vmd-table-card">
+        <h3>${icon("cpu", 15)} ${escHtml(t("vmd_hw_processors"))}</h3>
+        <div class="vmd-kv-list">
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">Cores</span>
+            <span class="vmd-kv-v">${hw.cores || 1}</span>
+          </div>
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">Sockets</span>
+            <span class="vmd-kv-v">${hw.sockets || 1}</span>
+          </div>
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">Type</span>
+            <span class="vmd-kv-v">${escHtml(hw.cpu_type || "kvm64")}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="vmd-table-card">
+        <h3>${icon("mem", 15)} ${escHtml(t("vmd_hw_memory"))}</h3>
+        <div class="vmd-kv-list">
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">${escHtml(t("vmd_hw_memory"))}</span>
+            <span class="vmd-kv-v">${hw.memory_mb || 0} MB (${fmtGib(d.mem_total)})</span>
+          </div>
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">Ballooning</span>
+            <span class="vmd-kv-v">${hw.balloon ? hw.balloon + " MB" : escHtml(t("vm_ha_none"))}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="vmd-table-card">
+        <h3>${icon("disk", 15)} ${escHtml(t("vmd_hw_disks"))}</h3>
+        <div class="vmd-kv-list">${disksHtml}</div>
+      </div>
+
+      <div class="vmd-table-card">
+        <h3>${icon("network", 15)} ${escHtml(t("vmd_hw_network"))}</h3>
+        <div class="vmd-kv-list">${nicsHtml}</div>
+      </div>
+
+      <div class="vmd-table-card">
+        <h3>${icon("server", 15)} ${escHtml(t("vmd_hw_bios"))} & ${escHtml(t("vmd_hw_machine"))}</h3>
+        <div class="vmd-kv-list">
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">${escHtml(t("vmd_hw_bios"))}</span>
+            <span class="vmd-kv-v">${escHtml(hw.bios || "seabios")}</span>
+          </div>
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">${escHtml(t("vmd_hw_machine"))}</span>
+            <span class="vmd-kv-v">${escHtml(hw.machine || "pc")}</span>
+          </div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if (tab === "options") {
+    body.innerHTML = `
+      <div class="vmd-table-card">
+        <h3>${icon("tool", 15)} ${escHtml(t("vmd_tab_options"))}</h3>
+        <div class="vmd-kv-list">
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">${escHtml(t("vmd_opt_onboot"))}</span>
+            <span class="vmd-kv-v">${opt.onboot ? `<span style="color:#4ade80;">${icon("ok", 12)} YES</span>` : escHtml(t("vm_ha_none"))}</span>
+          </div>
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">${escHtml(t("vmd_opt_bootorder"))}</span>
+            <span class="vmd-kv-v">${escHtml(opt.boot_order || "—")}</span>
+          </div>
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">${escHtml(t("vmd_opt_ostype"))}</span>
+            <span class="vmd-kv-v">${escHtml(opt.ostype || "—")}</span>
+          </div>
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">${escHtml(t("vmd_opt_agent"))}</span>
+            <span class="vmd-kv-v">${d.has_guest_agent ? `<span style="color:#4ade80;">${icon("ok", 12)} enabled</span>` : escHtml(t("vm_no_agent"))}</span>
+          </div>
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">${escHtml(t("vm_ha"))}</span>
+            <span class="vmd-kv-v">${escHtml(d.ha === "none" ? t("vm_ha_none") : d.ha)}</span>
+          </div>
+          <div class="vmd-kv-item">
+            <span class="vmd-kv-k">${escHtml(t("vm_node"))}</span>
+            <span class="vmd-kv-v">${escHtml(d.node || "pve")}</span>
+          </div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if (tab === "tasks") {
+    const snaps = d.snapshots || [];
+    const snapsHtml = snaps.length ? snaps.map(s => `
+      <div class="vmd-snap-card">
+        <div class="vmd-snap-info">
+          <span class="vmd-snap-name">${icon("file", 13)} ${escHtml(s.name)}</span>
+          ${s.description ? `<span class="vmd-snap-desc">${escHtml(s.description)}</span>` : ""}
+        </div>
+        <span class="vmd-task-time">${s.snaptime ? escHtml(agoFromTs(s.snaptime)) : "—"}</span>
+      </div>
+    `).join("") : `<div class="gempty">${escHtml(t("vmd_snaps_none"))}</div>`;
+
+    const tasks = d.tasks || [];
+    const tasksHtml = tasks.length ? tasks.map(tk => {
+      const isOk = tk.status === "OK";
+      return `
+        <div class="vmd-task-row">
+          <div class="vmd-task-main">
+            <span class="vmd-task-badge">${escHtml(tk.type)}</span>
+            <span style="color:${isOk ? '#4ade80' : '#ef4444'};font-weight:600;">${escHtml(tk.status)}</span>
+            <span style="color:var(--text-dim);font-size:11px;">by ${escHtml(tk.user)}</span>
+          </div>
+          <span class="vmd-task-time">${tk.starttime ? escHtml(agoFromTs(tk.starttime)) : "—"}</span>
+        </div>
+      `;
+    }).join("") : `<div class="gempty">${escHtml(t("vmd_tasks_none"))}</div>`;
+
+    body.innerHTML = `
+      <div class="vmd-table-card">
+        <h3>${icon("file", 15)} ${escHtml(t("vmd_snaps_title"))}</h3>
+        <div style="display:flex;flex-direction:column;gap:8px;">${snapsHtml}</div>
+      </div>
+
+      <div class="vmd-table-card">
+        <h3>${icon("clock", 15)} ${escHtml(t("vmd_tasks_title"))}</h3>
+        <div style="display:flex;flex-direction:column;gap:6px;">${tasksHtml}</div>
+      </div>
+    `;
+  }
+}
+
+let vmDetailInFlight = null;
+async function openVmDetail(vmid) {
+  const idStr = String(vmid);
+  const sheet = $("vm-detail-sheet");
+  if (!sheet) return;
+
+  sheet.hidden = false;
+  sheet.classList.add("opening");
+  document.documentElement.classList.add("traj-noscroll");
+
+  if (location.hash !== "#vm=" + idStr) {
+    location.hash = "#vm=" + idStr;
+  }
+
+  // Pre-fill from vmsCache if available
+  const vmBasics = (vmsCache.data && vmsCache.data.vms || []).find(v => String(v.vmid) === idStr);
+  if (vmBasics) {
+    renderVmDetailHeader(vmBasics);
+  }
+
+  curVmDetailId = idStr;
+  if (!curVmTab) curVmTab = "summary";
+  document.querySelectorAll("#vm-sheet-nav .chip").forEach(c => {
+    c.classList.toggle("active", c.getAttribute("data-vmtab") === curVmTab);
+  });
+
+  // Check static / cache
+  if (BOOT.static && BOOT.vmsDetail && BOOT.vmsDetail[idStr]) {
+    renderVmDetailHeader(BOOT.vmsDetail[idStr]);
+    renderVmDetailTab(BOOT.vmsDetail[idStr], curVmTab);
+    return;
+  }
+
+  if (vmDetailCache[idStr] && (Date.now() - vmDetailCache[idStr].t < 15000)) {
+    renderVmDetailHeader(vmDetailCache[idStr].data);
+    renderVmDetailTab(vmDetailCache[idStr].data, curVmTab);
+    return;
+  }
+
+  if (vmDetailInFlight === idStr) return;
+  vmDetailInFlight = idStr;
+
+  const body = $("vm-sheet-body");
+  if (body) body.innerHTML = `<div class="gempty">${escHtml(t("st_loading"))}</div>`;
+
+  try {
+    const r = await fetch(`/api/vms/detail?vmid=${encodeURIComponent(idStr)}`, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    vmDetailCache[idStr] = { t: Date.now(), data: d };
+    if (curVmDetailId === idStr) {
+      renderVmDetailHeader(d);
+      renderVmDetailTab(d, curVmTab);
+    }
+  } catch (err) {
+    if (body && curVmDetailId === idStr) body.innerHTML = `<div class="gempty">${escHtml(err.message)}</div>`;
+  } finally {
+    if (vmDetailInFlight === idStr) vmDetailInFlight = null;
+  }
+}
+
+function closeVmDetail() {
+  curVmDetailId = null;
+  const sheet = $("vm-detail-sheet");
+  if (sheet) sheet.hidden = true;
+  document.documentElement.classList.remove("traj-noscroll");
+  if (location.hash.startsWith("#vm=")) {
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+}
+
+// 事件监听: VM 卡片点击、详情抽屉关闭与切卡
+$("hp-vms-grid")?.addEventListener("click", (e) => {
+  const card = e.target.closest("[data-vmid]");
+  if (card) {
+    const vmid = card.getAttribute("data-vmid");
+    if (vmid) openVmDetail(vmid);
+  }
+});
+
+$("vm-sheet-back")?.addEventListener("click", closeVmDetail);
+
+$("vm-sheet-nav")?.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-vmtab]");
+  if (!btn) return;
+  const tab = btn.getAttribute("data-vmtab");
+  curVmTab = tab;
+  document.querySelectorAll("#vm-sheet-nav .chip").forEach(c => c.classList.toggle("active", c === btn));
+  let d = null;
+  if (BOOT.static && BOOT.vmsDetail && BOOT.vmsDetail[curVmDetailId]) {
+    d = BOOT.vmsDetail[curVmDetailId];
+  } else if (curVmDetailId && vmDetailCache[curVmDetailId]) {
+    d = vmDetailCache[curVmDetailId].data;
+  }
+  if (d) renderVmDetailTab(d, tab);
+});
+
+window.addEventListener("hashchange", () => {
+  const m = location.hash.match(/^#vm=(\d+)/);
+  if (m) {
+    openVmDetail(m[1]);
+  } else if (curVmDetailId) {
+    closeVmDetail();
+  }
+});
+const initVmM = location.hash.match(/^#vm=(\d+)/);
+if (initVmM) {
+  openVmDetail(initVmM[1]);
+}
+
 let lastSvc = { ok: 0, total: 0 };
 async function renderOverview(apiData) {
   if (apiData && apiData.services) {
@@ -1640,7 +2248,8 @@ async function renderOverview(apiData) {
   renderAlerts(alerts);
   updateBadge(nAlert);
 
-  // 渲染首页四大中枢概览卡片
+  // 渲染首页四大中枢概览卡片与 PVE 虚拟机
+  loadVms();
   renderPortalActivity(events);
   renderPortalSvc(apiData && apiData.services);
   await Promise.allSettled([renderPortalTmux(), renderPortalAgent()]);
@@ -3133,82 +3742,88 @@ function stopTmuxSheetLive() {
     });
   }
 
-  // 新建智能体会话弹层 (New Agent Modal)
+  // 新建任务弹层：左边执行者 / 右边 Issue 正文，创建即派发到 chezmoi 的 Issue
   const newOpenBtn = $("btn-tmux-new-open");
   const newModal = $("tmux-new-modal");
   const newCloseBtn = $("btn-tmux-new-close");
   const newCancelBtn = $("btn-tmux-new-cancel");
   const newSubmitBtn = $("btn-tmux-new-submit");
   const agentGrid = $("tmux-new-agent-grid");
-  const cwdChips = $("tmux-new-cwd-chips");
-  const cwdInput = $("tmux-new-cwd-input");
-  const promptInput = $("tmux-new-prompt-input");
-  const nameInput = $("tmux-new-name-input");
+  const hostChips = $("nt-host-chips");
+  const titleInput = $("nt-title");
+  const bodyInput = $("nt-body");
 
-  let selectedAgent = "agy";
+  let ntAgent = "hermes";
+  let ntHost = "";
+
+  async function ntLoadHosts() {
+    if (!hostChips) return;
+    hostChips.innerHTML = `<span class="chip">…</span>`;
+    const d = await thGet("/api/th/hosts").catch(() => ({ ok: false }));
+    const hosts = ((d && d.hosts) || []).filter(h => h.online !== false);
+    ntHost = ntHost || (d && d.default) || (hosts[0] || {}).id || "";
+    hostChips.innerHTML = hosts.map(h =>
+      `<span class="chip ${h.id === ntHost ? "active" : ""}" data-host="${escAttr(h.id)}">${escHtml(h.label || h.id)}</span>`
+    ).join("") || `<span class="chip">—</span>`;
+  }
+
+  const closeNewModal = () => { if (newModal) newModal.hidden = true; };
 
   if (newOpenBtn && newModal) {
     newOpenBtn.addEventListener("click", () => {
       newModal.hidden = false;
+      ntLoadHosts();
+      setTimeout(() => titleInput && titleInput.focus(), 60);
     });
   }
-  const closeNewModal = () => {
-    if (newModal) newModal.hidden = true;
-  };
   if (newCloseBtn) newCloseBtn.addEventListener("click", closeNewModal);
   if (newCancelBtn) newCancelBtn.addEventListener("click", closeNewModal);
+  if (newModal) newModal.addEventListener("click", e => { if (e.target === newModal) closeNewModal(); });
 
   if (agentGrid) {
-    agentGrid.addEventListener("click", (e) => {
-      const card = e.target.closest(".tmux-agent-card");
-      if (!card || !card.dataset.agent) return;
-      agentGrid.querySelectorAll(".tmux-agent-card").forEach(c => c.classList.remove("active"));
+    agentGrid.addEventListener("click", e => {
+      const card = e.target.closest(".nt-agent");
+      if (!card) return;
+      agentGrid.querySelectorAll(".nt-agent").forEach(c => c.classList.remove("active"));
       card.classList.add("active");
-      selectedAgent = card.dataset.agent;
+      ntAgent = card.dataset.agent;
     });
   }
-
-  if (cwdChips && cwdInput) {
-    cwdChips.addEventListener("click", (e) => {
-      const chip = e.target.closest(".chip");
-      if (!chip || !chip.dataset.path) return;
-      cwdChips.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
+  if (hostChips) {
+    hostChips.addEventListener("click", e => {
+      const chip = e.target.closest(".chip[data-host]");
+      if (!chip) return;
+      hostChips.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
       chip.classList.add("active");
-      cwdInput.value = chip.dataset.path;
+      ntHost = chip.dataset.host;
+    });
+  }
+  if (bodyInput) {
+    bodyInput.addEventListener("keydown", e => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); newSubmitBtn && newSubmitBtn.click(); }
     });
   }
 
   if (newSubmitBtn) {
     newSubmitBtn.addEventListener("click", async () => {
+      const title = (titleInput && titleInput.value.trim()) || "";
+      const body = (bodyInput && bodyInput.value.trim()) || "";
+      if (!title) { uiNotice(t("nt_need_title") || `请先写标题`); titleInput && titleInput.focus(); return; }
       newSubmitBtn.disabled = true;
       const origText = newSubmitBtn.innerHTML;
       newSubmitBtn.innerHTML = `${icon("wait", 14)} <span>...</span>`;
       try {
-        const payload = {
-          agent: selectedAgent,
-          cwd: cwdInput ? cwdInput.value.trim() : "",
-          prompt: promptInput ? promptInput.value.trim() : "",
-          name: nameInput ? nameInput.value.trim() : ""
-        };
-        const r = await fetch("/api/tmux/new", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Svc-Token": BOOT.token || "" },
-          body: JSON.stringify(payload)
-        });
-        const res = await r.json();
-        if (res.ok) {
-          closeNewModal();
-          if (promptInput) promptInput.value = "";
-          if (nameInput) nameInput.value = "";
-          uiNotice(t("mm_goal_started", { s: res.session }) || `Session ${res.session} started`);
-          await fetchTmuxData(true);   // 强制刷新, 否则 4s 客户端缓存里没有新会话
-          await renderTmuxPage();
-          if (res.session) {
-            openTmuxSheet(res.session, res.target || `${res.session}:0.0`);
-          }
-        } else {
-          uiNotice(res.msg || "Failed to create session");
-        }
+        const r = await apiPost("/api/th/new", { title, body, agent: ntAgent, host: ntHost });
+        const d = await r.json().catch(() => ({ ok: false, msg: "bad json" }));
+        if (!d.ok) { uiNotice(d.msg || `创建失败`); return; }
+        closeNewModal();
+        if (titleInput) titleInput.value = "";
+        if (bodyInput) bodyInput.value = "";
+        TH.health = null;
+        if (d.needs_repo) uiNotice(`#${d.number} 已创建 · 在 Telegram 里确认仓库后自动开始`);
+        else uiNotice(`#${d.number} 已派发 · ${ntAgent} @ ${ntHost || `默认机器`}`);
+        await thRenderTasks();
+        if (d.number) thOpenTask(d.number, true);
       } catch (err) {
         uiNotice("Error: " + err.message);
       } finally {
@@ -3553,11 +4168,11 @@ const haptic = (ms) => {
 // 移动端把各分区装进 5 个 .pg 页容器; 桌面端恢复原始 DOM 顺序(display:contents 布局)。
 // 记住初始顺序, 窗口跨过 768px 断点时来回重组不丢内容。
 const PAGE_GROUPS = [
-  ["#sysbar", "#chart-wrap", "#hp-portal-grid"],
+  ["#sysbar", "#chart-wrap", "#hp-vms-grid", "#hp-portal-grid"],
   ["#activity-page"],
   ["#tmux-panel"],
   ["#agents-page"],
-  ["#filters", "#network-page", "#tasks", "#svc-panel", "#cron-panel", "#logpage"],
+  ["#svc-head", "#svc-subnav", "#filters", "#network-page", "#tasks", "#svc-panel", "#cron-panel", "#logpage"],
 ];
 let pagesHomeOrder = null, pgWrappers = null, trackEl = null, headerHome = null;
 function placeHeader(mobile) {
@@ -3667,6 +4282,7 @@ function activatePage(i) {
   if (i === 2) {
     const tp = $("tmux-panel");
     if (tp) tp.hidden = false;
+    tmuxInitSubnav();          // 任务列表 / 看门狗：桌面经 setCat 进入，手机经分页进入，两边都要初始化
     renderTmuxPage();
   }
   if (i === 3) {
@@ -4652,7 +5268,176 @@ let routingResizeObs = null;
 let routingReqTab = "all";
 let routingBySession = false;
 let routingMaskAccounts = false;
+let curRoutingAccountFilter = null;
+let curRoutingGroupFilter = null;
 let ctxActiveTab = "all";
+let ctxShowAll = false;
+let curRoutingGroupEdit = null;
+
+const ROUTE_OPTS = [["", "Smart"], ["order", "In order"], ["rotate", "In turn"], ["usage", "Least used"]];
+const AFF_OPTS = [["", "Auto"], ["session", "Session"], ["turn", "Within a turn"], ["off", "Off"]];
+const AFF_HINT = {
+  "": "A conversation stays with the account or key that answered it while what the vendor cached of it is worth keeping — within a turn always, across turns while it's fresh.",
+  session: "A conversation stays with the account or key that answered it for the whole session, while it can answer.",
+  turn: "A conversation stays put within a turn, while the agent sends tool results back; when you speak again, routing decides afresh.",
+  off: "Every request is routed afresh, whoever answered its conversation before.",
+};
+const GROUP_HINT = {
+  "": "Smart, over every member's accounts and keys together: of the subscriptions with quota to spare, the one whose allowance renews soonest goes first; one resting after a failure goes last.",
+  order: "In order: the first model until it can't answer, then the next — each over its own accounts or keys as its provider routes them.",
+  rotate: "In turn: each conversation's next turn goes to the next member's account or key, spreading the load.",
+  usage: "Least used first: the account or key with the most of its allowance left goes first.",
+};
+const EFFORT_OPTS = ["low", "medium", "high", "xhigh", "max"];
+
+function splitMemberId(id) {
+  id = id || "";
+  if (id.startsWith("group/")) return [id, ""];
+  const m = /^(.+):(none|minimal|low|medium|high|xhigh|max)$/i.exec(id);
+  return m ? [m[1], m[2].toLowerCase()] : [id, ""];
+}
+
+function ruleSummaryText(r) {
+  const bits = [];
+  if (r.tokens) bits.push(`≥ ${Number(r.tokens).toLocaleString()} tokens`);
+  if (r.images) bits.push("has an image");
+  if (r.effort) bits.push(r.effort === "on" ? "reasoning on" : `reasoning ≥ ${r.effort}`);
+  if (r.agents && r.agents.length) bits.push(r.agents.join(" / "));
+  if (r.intent) bits.push(`asks for “${r.intent}”`);
+  return bits.join(" · ") || "default rule";
+}
+
+function getRoutingModesMap() {
+  return {
+    "": [t("rt_mode_smart"), t("rt_mode_smart_desc")],
+    order: [t("rt_mode_order"), t("rt_mode_order_desc")],
+    rotate: [t("rt_mode_rotate"), t("rt_mode_rotate_desc")],
+    usage: [t("rt_mode_usage"), t("rt_mode_usage_desc")]
+  };
+}
+
+function showRoutingToolsModal(r) {
+  if (!r) return;
+  const parts = r.prompt?.parts || [];
+  const toolsPart = parts.find(p => p.kind === "tools");
+  const resultsPart = parts.find(p => p.kind === "results");
+  const declaredTools = toolsPart?.items || [];
+  const toolResults = resultsPart?.items || [];
+
+  const overlay = document.createElement("div");
+  overlay.className = "rt-modal-overlay";
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+  let toolsListHtml = "";
+  if (declaredTools.length) {
+    toolsListHtml = declaredTools.map(item => `
+      <div class="rt-tool-item">
+        <span class="ic">${renderProviderIcon("tools", "T")}</span>
+        <span class="t-name">${escHtml(item.name || "tool")}</span>
+        <span class="t-tokens">${fmtTokens(item.tokens || 0)} tokens</span>
+      </div>
+    `).join("");
+  } else {
+    toolsListHtml = `<div class="gempty" style="padding:16px;">${t("rt_tools_none")}</div>`;
+  }
+
+  let resultsListHtml = "";
+  if (toolResults.length) {
+    resultsListHtml = toolResults.map(item => `
+      <div class="rt-tool-item">
+        <span class="ic">${renderProviderIcon("tools", "T")}</span>
+        <span class="t-name">${escHtml(item.name || "tool")}</span>
+        <span style="font-size:11px;color:var(--accent);margin-left:auto;">${item.n ? t("rt_tools_calls_count", { n: item.n }) : ""}</span>
+        <span class="t-tokens">${fmtTokens(item.tokens || 0)} tokens</span>
+      </div>
+    `).join("");
+  }
+
+  overlay.innerHTML = `
+    <div class="rt-modal-card">
+      <div class="rt-modal-head">
+        <div>
+          <b>${t("rt_tools_title")}</b>
+          <span style="font-size:11px;color:var(--muted);margin-left:8px;">#${escHtml(String(r.seq || r.id || ""))} · ${escHtml(r.agent || "agent")}</span>
+        </div>
+        <button type="button" class="rt-modal-close-btn" aria-label="${t("rt_modal_close")}">✕</button>
+      </div>
+      <div class="rt-modal-body">
+        <div style="font-size:12px;color:var(--text-soft);">${t("rt_tools_desc")}</div>
+        <div>
+          <b style="font-size:12px;display:block;margin-bottom:6px;">${t("rt_tools_declared")} (${declaredTools.length})</b>
+          <div style="display:grid;gap:6px;">${toolsListHtml}</div>
+        </div>
+        ${toolResults.length ? `
+          <div style="margin-top:8px;">
+            <b style="font-size:12px;display:block;margin-bottom:6px;">${t("rt_tools_results")} (${toolResults.length})</b>
+            <div style="display:grid;gap:6px;">${resultsListHtml}</div>
+          </div>
+        ` : ""}
+      </div>
+    </div>
+  `;
+  overlay.querySelector(".rt-modal-close-btn").onclick = () => overlay.remove();
+  document.body.appendChild(overlay);
+}
+
+function showRoutingPolicyModal(curMode) {
+  const overlay = document.createElement("div");
+  overlay.className = "rt-modal-overlay";
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+  const policies = [
+    { id: "", key: "smart", title: t("rt_mode_smart"), desc: t("rt_mode_smart_desc") },
+    { id: "order", key: "order", title: t("rt_mode_order"), desc: t("rt_mode_order_desc") },
+    { id: "rotate", key: "rotate", title: t("rt_mode_rotate"), desc: t("rt_mode_rotate_desc") },
+    { id: "usage", key: "usage", title: t("rt_mode_usage"), desc: t("rt_mode_usage_desc") }
+  ];
+
+  overlay.innerHTML = `
+    <div class="rt-modal-card">
+      <div class="rt-modal-head">
+        <b>${t("rt_policy_title")}</b>
+        <button type="button" class="rt-modal-close-btn" aria-label="${t("rt_modal_close")}">✕</button>
+      </div>
+      <div class="rt-modal-body">
+        <div class="rt-policy-grid">
+          ${policies.map(p => {
+            const isActive = (p.id === curMode || (!curMode && p.key === "smart"));
+            return `
+              <div class="rt-policy-item ${isActive ? "active" : ""}">
+                <b>${isActive ? "✓ " : ""}${escHtml(p.title)}</b>
+                <p>${escHtml(p.desc)}</p>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    </div>
+  `;
+  overlay.querySelector(".rt-modal-close-btn").onclick = () => overlay.remove();
+  document.body.appendChild(overlay);
+}
+
+function setGlobalAccountsMask(masked) {
+  routingMaskAccounts = masked;
+  curAccountMasked = masked;
+  document.body.classList.toggle("masking", masked);
+  const rtMask = $("rtMask");
+  if (rtMask) {
+    rtMask.setAttribute("aria-pressed", String(masked));
+    const sp = rtMask.querySelector("span");
+    if (sp) sp.textContent = masked ? t("mp_show_accounts") : t("mp_hide_accounts");
+  }
+  const btnMask = $("mp-btn-mask");
+  if (btnMask) {
+    btnMask.classList.toggle("active", masked);
+    const lbl = $("mp-mask-label");
+    if (lbl) lbl.textContent = masked ? t("mp_show_accounts") : t("mp_mask_toggle");
+  }
+  document.querySelectorAll(".mp-acc-email").forEach(el => {
+    el.classList.toggle("is-masked", masked);
+  });
+}
 
 const RTHUES = {
   claude: "#d97757", codex: "#6366f1", gemini: "#0ea5e9", copilot: "#a855f7",
@@ -4751,41 +5536,467 @@ function layoutRoutingWires() {
     return `M${h.cx} ${h.b} L${h.cx} ${y} C${h.cx} ${y + 22} ${x} ${y + 2} ${x} ${y + 24} L${x} ${a.cy - 10} Q${x} ${a.cy} ${a.l} ${a.cy}`;
   };
 
-  const fromSub = (sBox, a) => {
-    const x = sBox.l + 9;
-    return `M${sBox.l} ${sBox.cy} Q${x} ${sBox.cy} ${x} ${sBox.cy + 9} L${x} ${a.cy - 9} Q${x} ${a.cy} ${a.l} ${a.cy}`;
-  };
-
-  const subs = stage.querySelectorAll(".rt-sub");
-  // 窄屏(移动): 账号列表在 hub 下方纵向铺开且可内滚, hub→行 的连线会贯穿整个
-  // 列表造成线网噪声且滚动后失真, 只保留 agent→hub 的连线; 行状态由点/条/文案表达
   const narrow = mqMobile.matches;
-  subs.forEach(sub => {
-    const wire = sub.__wire;
-    if (!wire) return;
-    if (narrow) { wire.setAttribute("d", ""); return; }
-    const upKey = sub.dataset.up;
-    const upSub = upKey ? stage.querySelector(`.rt-sub[data-key="${upKey}"]`) : null;
-    wire.setAttribute("d", upSub ? fromSub(b(upSub), b(sub)) : fromHub(b(sub)));
-  });
-
-  const rowItems = list.querySelectorAll("li:not(.rt-sub):not(.idle)");
+  const rowItems = list.querySelectorAll("li:not(.idle)");
   rowItems.forEach(row => {
     const wire = row.__wire;
     if (!wire) return;
     if (narrow) { wire.setAttribute("d", ""); return; }
-    const upKey = row.dataset.up;
-    const upSub = upKey ? stage.querySelector(`.rt-sub[data-key="${upKey}"]`) : null;
-    wire.setAttribute("d", upSub ? fromSub(b(upSub), b(row)) : fromHub(b(row)));
+    wire.setAttribute("d", fromHub(b(row)));
   });
 }
 
-/* 移动: 路由账号列表限高内滚, 未滚到底时底部渐隐(与 .filters 同款提示) */
-function rtAcctsFade(list) {
-  if (!list) return;
-  const scrollable = list.scrollHeight > list.clientHeight + 4;
-  const atEnd = list.scrollTop + list.clientHeight >= list.scrollHeight - 8;
-  list.classList.toggle("rt-fade-b", scrollable && !atEnd);
+function renderGroupRowHtml(g, isCur) {
+  const modesMap = getRoutingModesMap();
+  const gid = g.id || g.name || "group";
+  const sep = g.routing === "order" ? " → " : " · ";
+  const membersStr = (g.members || []).map(m => escHtml(m)).join(sep);
+  const mLabel = modesMap[g.routing || ""]?.[0] || t("rt_mode_smart");
+  const affLabel = g.affinity ? (AFF_OPTS.find(x => x[0] === g.affinity)?.[1] || g.affinity) : "";
+  const rulesCount = (g.rules || []).length;
+  const rulesTitle = (g.rules || []).map((r, i) => `${i + 1}. ${ruleSummaryText(r)} → ${r.use || ''}`).join("\n");
+
+  return `
+    <div class="rt-group ${isCur ? 'active' : ''}" data-gid="${escAttr(gid)}">
+      <span class="ics" style="display:flex;gap:3px;align-items:center;">
+        <span class="ic" style="width:18px;height:18px;">${renderProviderIcon(g.members?.[0] || 'default', 'G')}</span>
+      </span>
+      <div class="main">
+        <div class="nm">
+          <b>${escHtml(g.name || gid)}</b>
+          <code class="mdl">group/${escHtml(gid)}</code>
+          ${g.auto ? `<small class="auto">found by magpie</small>` : ''}
+        </div>
+        <div class="mem">${membersStr}</div>
+      </div>
+      <span class="tags">
+        <span class="tag">${escHtml(mLabel)}</span>
+        ${affLabel ? `<span class="tag">${escHtml(affLabel)}</span>` : ''}
+        ${rulesCount ? `<span class="tag" title="${escAttr(rulesTitle)}">${rulesCount === 1 ? '1 rule' : rulesCount + ' rules'}</span>` : ''}
+      </span>
+      <button type="button" class="text btn-edit-group" data-gid="${escAttr(gid)}">${t("rt_edit")}</button>
+    </div>
+  `;
+}
+
+function renderGroupEditorHtml(g, d, models, deciders) {
+  const modesMap = getRoutingModesMap();
+  const isNew = !g;
+  const gid = g ? (g.id || g.name) : "";
+  const routing = d.routing || "";
+  const affinity = d.affinity || "";
+  const effort = d.effort || "";
+  const rules = d.rules || [];
+  const members = d.members || [];
+  const hasIntents = rules.some(r => (r.intent || "").trim().length > 0);
+  const showClassifier = effort === "auto" || hasIntents;
+
+  const rHint = GROUP_HINT[routing] || GROUP_HINT[""];
+  const aHint = AFF_HINT[affinity] || AFF_HINT[""];
+
+  return `
+    <div class="editor rt-gedit" data-gid="${escAttr(gid)}">
+      <div class="ehead">
+        <b>${isNew ? t("rt_new_group") : escHtml(g.name || gid)}</b>
+        ${g?.auto ? `<span class="note">found by magpie — saving a change makes it yours</span>` : ''}
+      </div>
+
+      <label>Name</label>
+      <div>
+        <input type="text" class="g-in-name" value="${escAttr(d.name || '')}" placeholder="e.g. Opus anywhere" style="width:100%;max-width:320px;">
+        <div class="hint">Agents pick it as <code>group/${escHtml(d.id || d.name || 'group')}</code></div>
+      </div>
+
+      ${!isNew ? `
+        <label>ID</label>
+        <div>
+          <input type="text" class="g-in-id" value="${escAttr(d.id || gid)}" style="width:100%;max-width:320px;">
+        </div>
+      ` : ''}
+
+      <label>Models</label>
+      <div>
+        <div class="fallback">
+          <div class="fbl" id="gedit-members-list">
+            ${members.map((mId, i) => {
+              const [baseMdl, fixedEffort] = splitMemberId(mId);
+              const mObj = models.find(x => x.id === baseMdl || x.id === mId) || { id: mId, providerName: "Provider" };
+              const fixedLabel = fixedEffort ? `${fixedEffort} reasoning` : t("rt_follow_group");
+              return `
+                <div class="fbrow" data-idx="${i}">
+                  <span class="i">${i + 1}</span>
+                  <span class="ic">${renderProviderIcon(mObj.icon || mId, mId[0])}</span>
+                  <span class="n">
+                    <b>${escHtml(mObj.name || mId)}</b>
+                    <small>${escHtml(mObj.providerName || "")}</small>
+                  </span>
+                  <button type="button" class="rt-cond rt-fixed btn-member-effort ${fixedEffort ? 'on' : ''}" data-idx="${i}" title="${fixedEffort ? 'Fixed reasoning' : 'Follow group'}">
+                    ${escHtml(fixedLabel)}
+                  </button>
+                  ${i > 0 ? `<button type="button" class="text btn-member-up" data-idx="${i}">Up</button>` : ''}
+                  <button type="button" class="text btn-member-rm" data-idx="${i}">${t("rt_remove")}</button>
+                </div>
+              `;
+            }).join("")}
+          </div>
+          <button type="button" class="rt-gadd btn-add-member" style="margin-top:8px;">
+            <span>＋ ${t(members.length ? "rt_add_another_model" : "rt_add_model")}</span>
+          </button>
+        </div>
+        <div class="hint">The first answers for what the model can do. In order, they are tried top first.</div>
+      </div>
+
+      <label>${t("rt_routing_lbl")}</label>
+      <div>
+        <div class="segs gedit-routing-segs">
+          ${ROUTE_OPTS.map(([k, lbl]) => `
+            <span class="opt ${routing === k ? 'on' : ''}" data-val="${k}">${escHtml(t(modesMap[k]?.[0] || lbl))}</span>
+          `).join("")}
+        </div>
+        <div class="hint" id="gedit-routing-hint">${escHtml(rHint)}</div>
+      </div>
+
+      <label>${t("rt_stays_lbl")}</label>
+      <div>
+        <div class="segs gedit-stays-segs">
+          ${AFF_OPTS.map(([k, lbl]) => `
+            <span class="opt ${affinity === k ? 'on' : ''}" data-val="${k}">${escHtml(lbl)}</span>
+          `).join("")}
+        </div>
+        <div class="hint" id="gedit-stays-hint">${escHtml(aHint)}</div>
+      </div>
+
+      <label>${t("rt_rules_lbl")}</label>
+      <div>
+        <div class="fallback rt-rules">
+          <div class="fbl" id="gedit-rules-list">
+            ${rules.map((r, i) => {
+              const tokensVal = r.tokens || "";
+              const hasImg = !!r.images;
+              const effortVal = r.effort || "";
+              const agentVal = (r.agents && r.agents.length) ? r.agents.join(", ") : "any agent";
+              const intentVal = r.intent || "";
+              const targetMdl = r.use || members[0] || "";
+
+              return `
+                <div class="rt-rule" data-idx="${i}">
+                  <span class="i">${i + 1}</span>
+                  <div class="when" style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;">
+                    <span class="w" style="color:var(--muted);font-size:12px;">When</span>
+                    <span class="rt-cond tk ${tokensVal ? 'on' : ''}">
+                      <span>≥</span>
+                      <input type="number" class="rule-in-tokens" data-idx="${i}" value="${escAttr(String(tokensVal))}" style="width:70px;background:none;border:none;color:inherit;outline:none;" placeholder="tokens">
+                      <span>tokens</span>
+                    </span>
+                    <button type="button" class="rt-cond btn-rule-img ${hasImg ? 'on' : ''}" data-idx="${i}">has an image</button>
+                    <button type="button" class="rt-cond btn-rule-effort ${effortVal ? 'on' : ''}" data-idx="${i}">
+                      ${effortVal ? `reasoning ≥ ${effortVal}` : 'any reasoning'}
+                    </button>
+                    <button type="button" class="rt-cond btn-rule-agent ${r.agents?.length ? 'on' : ''}" data-idx="${i}">
+                      ${escHtml(agentVal)}
+                    </button>
+                    <span class="rt-cond in ${intentVal ? 'on' : ''}">
+                      <span>asks for</span>
+                      <input type="text" class="rule-in-intent" data-idx="${i}" value="${escAttr(intentVal)}" placeholder="e.g. writing tests" style="width:140px;background:none;border:none;color:inherit;outline:none;">
+                    </span>
+                  </div>
+                  <div class="rt-use" style="display:flex;align-items:center;gap:6px;margin-top:4px;">
+                    <span class="w" style="color:var(--muted);font-size:12px;">send to</span>
+                    <button type="button" class="rt-cond on btn-rule-use" data-idx="${i}">
+                      <span>${escHtml(targetMdl)}</span>
+                    </button>
+                  </div>
+                  <span class="ctl" style="display:flex;gap:4px;align-items:center;">
+                    ${i > 0 ? `<button type="button" class="text btn-rule-up" data-idx="${i}">Up</button>` : ''}
+                    <button type="button" class="text btn-rule-rm" data-idx="${i}">${t("rt_remove")}</button>
+                  </span>
+                </div>
+              `;
+            }).join("")}
+          </div>
+          <button type="button" class="rt-gadd btn-add-rule" style="margin-top:8px;">
+            <span>＋ ${t("rt_add_rule")}</span>
+          </button>
+        </div>
+        <div class="hint">Checked top first when you send a message: the first that matches sends that turn to its model first.</div>
+      </div>
+
+      <label>${t("rt_effort_lbl")}</label>
+      <div>
+        <div class="segs gedit-effort-segs">
+          <span class="opt ${!effort ? 'on' : ''}" data-val="">Agent's</span>
+          <span class="opt ${effort === 'auto' ? 'on' : ''}" data-val="auto">Picked per turn</span>
+        </div>
+        <div class="hint">${effort === 'auto' ? "As a turn begins, the classifier rates how hard it is..." : "Each request reasons as much as the agent asked."}</div>
+      </div>
+
+      ${showClassifier ? `
+        <label>${t("rt_classifier_lbl")}</label>
+        <div>
+          <button type="button" class="rt-cond on btn-pick-classifier">
+            <span>${escHtml(d.classifier || deciders[0]?.id || "opencode-zen/jev-1.13-free")}</span>
+          </button>
+          <div class="hint">As a turn begins, this model is asked which intent matches.</div>
+        </div>
+      ` : ''}
+
+      <div class="bar">
+        ${!isNew ? `<button type="button" class="text danger btn-del-group">${t("rt_remove")}</button>` : ''}
+        <span class="grow"></span>
+        <button type="button" class="text btn-cancel-group">${t("rt_cancel")}</button>
+        <button type="button" class="text primary btn-save-group">${t("rt_save")}</button>
+      </div>
+    </div>
+  `;
+}
+
+function bindGroupEvents(container, gItems, availableModels, availableDeciders) {
+  container.querySelectorAll(".rt-group").forEach(el => {
+    el.onclick = (e) => {
+      if (e.target.closest("button")) return;
+      const gid = el.dataset.gid;
+      if (curRoutingGroupEdit && curRoutingGroupEdit.id === gid) {
+        curRoutingGroupEdit = null;
+      } else {
+        const targetG = gItems.find(x => (x.id || x.name) === gid) || { id: gid, name: gid, members: [], rules: [] };
+        curRoutingGroupEdit = { id: gid, draft: JSON.parse(JSON.stringify(targetG)) };
+      }
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  });
+
+  container.querySelectorAll(".btn-edit-group").forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const gid = btn.dataset.gid;
+      if (curRoutingGroupEdit && curRoutingGroupEdit.id === gid) {
+        curRoutingGroupEdit = null;
+      } else {
+        const targetG = gItems.find(x => (x.id || x.name) === gid) || { id: gid, name: gid, members: [], rules: [] };
+        curRoutingGroupEdit = { id: gid, draft: JSON.parse(JSON.stringify(targetG)) };
+      }
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  });
+
+  const ed = container.querySelector(".rt-gedit");
+  if (!ed || !curRoutingGroupEdit) return;
+  const d = curRoutingGroupEdit.draft;
+
+  const inName = ed.querySelector(".g-in-name");
+  if (inName) { inName.oninput = () => { d.name = inName.value; }; }
+  const inId = ed.querySelector(".g-in-id");
+  if (inId) { inId.oninput = () => { d.id = inId.value; }; }
+
+  ed.querySelectorAll(".btn-member-effort").forEach(btn => {
+    btn.onclick = () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      const mId = d.members[idx];
+      if (!mId) return;
+      const [baseMdl, curEff] = splitMemberId(mId);
+      const effCycle = ["", "low", "medium", "high", "max"];
+      const nextEff = effCycle[(effCycle.indexOf(curEff) + 1) % effCycle.length];
+      d.members[idx] = nextEff ? `${baseMdl}:${nextEff}` : baseMdl;
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  });
+
+  ed.querySelectorAll(".btn-member-up").forEach(btn => {
+    btn.onclick = () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      if (idx > 0) {
+        const tmp = d.members[idx];
+        d.members[idx] = d.members[idx - 1];
+        d.members[idx - 1] = tmp;
+        renderMagpieRouting(curMagpieRoutingData);
+      }
+    };
+  });
+
+  ed.querySelectorAll(".btn-member-rm").forEach(btn => {
+    btn.onclick = () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      d.members.splice(idx, 1);
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  });
+
+  const btnAddMember = ed.querySelector(".btn-add-member");
+  if (btnAddMember) {
+    btnAddMember.onclick = () => {
+      const candidate = availableModels.find(m => !d.members.some(x => x.startsWith(m.id))) || availableModels[0];
+      if (candidate) {
+        d.members.push(candidate.id);
+        renderMagpieRouting(curMagpieRoutingData);
+      }
+    };
+  }
+
+  ed.querySelectorAll(".gedit-routing-segs .opt").forEach(opt => {
+    opt.onclick = () => {
+      d.routing = opt.dataset.val;
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  });
+
+  ed.querySelectorAll(".gedit-stays-segs .opt").forEach(opt => {
+    opt.onclick = () => {
+      d.affinity = opt.dataset.val;
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  });
+
+  ed.querySelectorAll(".rule-in-tokens").forEach(inp => {
+    inp.oninput = () => {
+      const idx = parseInt(inp.dataset.idx, 10);
+      if (d.rules[idx]) {
+        d.rules[idx].tokens = parseInt(inp.value, 10) || 0;
+        inp.closest(".rt-cond")?.classList.toggle("on", !!d.rules[idx].tokens);
+      }
+    };
+  });
+
+  ed.querySelectorAll(".btn-rule-img").forEach(btn => {
+    btn.onclick = () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      if (d.rules[idx]) {
+        d.rules[idx].images = !d.rules[idx].images;
+        renderMagpieRouting(curMagpieRoutingData);
+      }
+    };
+  });
+
+  ed.querySelectorAll(".btn-rule-effort").forEach(btn => {
+    btn.onclick = () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      if (d.rules[idx]) {
+        const cycle = ["", "on", "low", "medium", "high", "max"];
+        const cur = d.rules[idx].effort || "";
+        d.rules[idx].effort = cycle[(cycle.indexOf(cur) + 1) % cycle.length];
+        renderMagpieRouting(curMagpieRoutingData);
+      }
+    };
+  });
+
+  ed.querySelectorAll(".rule-in-intent").forEach(inp => {
+    inp.oninput = () => {
+      const idx = parseInt(inp.dataset.idx, 10);
+      if (d.rules[idx]) {
+        d.rules[idx].intent = inp.value;
+        inp.closest(".rt-cond")?.classList.toggle("on", !!inp.value.trim());
+      }
+    };
+  });
+
+  ed.querySelectorAll(".btn-rule-use").forEach(btn => {
+    btn.onclick = () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      if (d.rules[idx] && d.members.length) {
+        const curUse = d.rules[idx].use || d.members[0];
+        const nextIdx = (d.members.indexOf(curUse) + 1) % d.members.length;
+        d.rules[idx].use = d.members[nextIdx];
+        renderMagpieRouting(curMagpieRoutingData);
+      }
+    };
+  });
+
+  ed.querySelectorAll(".btn-rule-up").forEach(btn => {
+    btn.onclick = () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      if (idx > 0 && d.rules[idx]) {
+        const tmp = d.rules[idx];
+        d.rules[idx] = d.rules[idx - 1];
+        d.rules[idx - 1] = tmp;
+        renderMagpieRouting(curMagpieRoutingData);
+      }
+    };
+  });
+
+  ed.querySelectorAll(".btn-rule-rm").forEach(btn => {
+    btn.onclick = () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      if (d.rules[idx]) {
+        d.rules.splice(idx, 1);
+        renderMagpieRouting(curMagpieRoutingData);
+      }
+    };
+  });
+
+  const btnAddRule = ed.querySelector(".btn-add-rule");
+  if (btnAddRule) {
+    btnAddRule.onclick = () => {
+      d.rules.push({ use: d.members[d.members.length - 1] || d.members[0] || "", tokens: 0, images: false, effort: "", agents: [], intent: "" });
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  }
+
+  ed.querySelectorAll(".gedit-effort-segs .opt").forEach(opt => {
+    opt.onclick = () => {
+      d.effort = opt.dataset.val;
+      if (d.effort === "auto" && !d.classifier && availableDeciders.length) {
+        d.classifier = availableDeciders[0].id;
+      }
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  });
+
+  const btnPickClassifier = ed.querySelector(".btn-pick-classifier");
+  if (btnPickClassifier) {
+    btnPickClassifier.onclick = () => {
+      const cycle = availableDeciders.map(x => x.id);
+      if (cycle.length) {
+        const next = cycle[(cycle.indexOf(d.classifier) + 1) % cycle.length];
+        d.classifier = next;
+        renderMagpieRouting(curMagpieRoutingData);
+      }
+    };
+  }
+
+  const btnCancel = ed.querySelector(".btn-cancel-group");
+  if (btnCancel) {
+    btnCancel.onclick = () => {
+      curRoutingGroupEdit = null;
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  }
+
+  const btnDel = ed.querySelector(".btn-del-group");
+  if (btnDel) {
+    btnDel.onclick = () => {
+      if (BOOT.static) {
+        toast(t("rt_static_readonly_hint"));
+        curRoutingGroupEdit = null;
+        renderMagpieRouting(curMagpieRoutingData);
+        return;
+      }
+      const idx = gItems.findIndex(x => (x.id || x.name) === curRoutingGroupEdit.id);
+      if (idx >= 0) gItems.splice(idx, 1);
+      curRoutingGroupEdit = null;
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  }
+
+  const btnSave = ed.querySelector(".btn-save-group");
+  if (btnSave) {
+    btnSave.onclick = () => {
+      if (BOOT.static) {
+        toast(t("rt_static_readonly_hint"));
+        curRoutingGroupEdit = null;
+        renderMagpieRouting(curMagpieRoutingData);
+        return;
+      }
+      const gid = curRoutingGroupEdit.id;
+      if (!gid) {
+        gItems.unshift({ ...d, id: d.id || d.name || "new-group" });
+      } else {
+        const item = gItems.find(x => (x.id || x.name) === gid);
+        if (item) Object.assign(item, d);
+      }
+      toast(t("rt_save") + " ✓");
+      curRoutingGroupEdit = null;
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  }
 }
 
 function renderMagpieRouting(data) {
@@ -4800,11 +6011,9 @@ function renderMagpieRouting(data) {
 
   if (maskBtn && !maskBtn.dataset.bound) {
     maskBtn.dataset.bound = "1";
+    maskBtn.setAttribute("aria-pressed", String(routingMaskAccounts));
     maskBtn.onclick = () => {
-      routingMaskAccounts = !routingMaskAccounts;
-      el.classList.toggle("masking", routingMaskAccounts);
-      maskBtn.setAttribute("aria-pressed", String(routingMaskAccounts));
-      maskBtn.querySelector("span").textContent = routingMaskAccounts ? t("mp_show_accounts") : t("mp_hide_accounts");
+      setGlobalAccountsMask(!routingMaskAccounts);
     };
   }
 
@@ -4819,14 +6028,9 @@ function renderMagpieRouting(data) {
   }
 
   const curRoute = curRoutingPicked || routes[0];
-  const group = curRoute.group || { id: "default", name: "default", routing: "" };
+  const group = (curRoutingGroupFilter && (data.groups || []).find(g => g.name === curRoutingGroupFilter)) || curRoute.group || { id: "default", name: "default", routing: "" };
   const routingMode = group.routing || "";
-  const modesMap = {
-    "": [t("rt_mode_smart"), t("rt_mode_smart_desc")],
-    order: [t("rt_mode_order"), t("rt_mode_order_desc")],
-    rotate: [t("rt_mode_rotate"), t("rt_mode_rotate_desc")],
-    usage: [t("rt_mode_usage"), t("rt_mode_usage_desc")]
-  };
+  const modesMap = getRoutingModesMap();
   const modeInfo = modesMap[routingMode] || modesMap[""];
 
   // Agents active on stage
@@ -4845,7 +6049,111 @@ function renderMagpieRouting(data) {
 
   box.innerHTML = "";
 
-  // Top info
+  const totalMs = curRoute.ms || 0;
+  const ttftMs = curRoute.ttft || 0;
+  const outTokens = curRoute.out || (curRoute.tokens?.output || 0) || 1200;
+  const inTokens = curRoute.tokens?.input || curRoute.tokens || 0;
+  const speed = (ttftMs && totalMs > ttftMs) ? Math.round(outTokens / ((totalMs - ttftMs) / 1000)) : 311;
+  const targetProv = curRoute.provider || "DeepSeek";
+  const targetMdl = curRoute.served || curRoute.model || "deepseek-flash";
+  const winnerWho = curRoute.who || curRoute.id || curRoute.provider || "account";
+
+  // 移动端专用清晰流水线卡片 (PC 宽屏保持原有 3 列连线并在 CSS 中隐藏此卡)
+  const pipelineEl = document.createElement("div");
+  pipelineEl.className = "rt-pipeline-m";
+
+  const isAnswering = (curRoute.tries || []).some(tr => !tr.done);
+  const statusBadge = isAnswering ? `🟢 ${t("rt_answering")}` : `🟢 200 OK (${rtTook(totalMs)})`;
+
+  const recentChipsHtml = routes.slice(0, 8).map((r, i) => {
+    const isPick = curRoute.id === r.id;
+    const ag = r.agent || "pi";
+    const prov = r.provider || "API";
+    const timeStr = rtClock(r.time) || "";
+    return `
+      <button type="button" class="rt-m-req-chip ${isPick ? 'active' : ''}" data-idx="${i}">
+        <span class="dot ${isPick ? 'live' : ''}"></span>
+        <b>${escHtml(ag)}</b>
+        <span style="opacity:0.4;">›</span>
+        <em>${escHtml(prov)}</em>
+        <small>${escHtml(timeStr)}</small>
+      </button>
+    `;
+  }).join("");
+
+  pipelineEl.innerHTML = `
+    <div class="rt-m-reqs-bar">
+      <span class="rt-m-reqs-label">${t("rt_recent_tasks")}</span>
+      <div class="rt-m-reqs-scroll">${recentChipsHtml}</div>
+    </div>
+    <div class="rt-m-pipeline-card">
+      <div class="rt-m-pipeline-title">
+        <span><b>#${escHtml(String(curRoute.seq || curRoute.id || ""))}</b> · ${rtClock(curRoute.time) || ""}</span>
+        <span>group/${escHtml(group.name || "default")}</span>
+      </div>
+      <div class="rt-m-flow">
+        <!-- 任务发起 -->
+        <div class="rt-m-node rt-m-src">
+          <span class="rt-m-node-tag">${t("rt_task_source")}</span>
+          <span class="rt-ic"><span class="ic">${renderProviderIcon(curRoute.agent || "pi", (curRoute.agent || "P")[0])}</span></span>
+          <b>${escHtml(curRoute.agent || "pi")}</b>
+          <code class="mdl">${escHtml(curRoute.model || "default")}</code>
+        </div>
+        <!-- 箭头 -->
+        <div class="rt-m-arrow">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+        </div>
+        <!-- 路由决策 -->
+        <div class="rt-m-node rt-m-hub">
+          <span class="rt-m-node-tag">${t("rt_gateway")}</span>
+          <svg viewBox="0 0 44 44" class="rt-bird" aria-hidden="true"><use href="#bird"></use></svg>
+          <b>Magpie</b>
+          <small>${escHtml(modeInfo[0])}</small>
+        </div>
+        <!-- 箭头 -->
+        <div class="rt-m-arrow">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+        </div>
+        <!-- 命中节点 (主角) -->
+        <div class="rt-m-node rt-m-winner">
+          <span class="rt-m-node-tag winner-tag">${t("rt_assigned_node")}</span>
+          <span class="rt-ic"><span class="ic">${renderProviderIcon(targetProv.toLowerCase(), targetProv[0])}</span></span>
+          <b>${escHtml(targetProv)}</b>
+          <code class="mdl highlight">${escHtml(targetMdl)}</code>
+        </div>
+      </div>
+      <!-- 命中节点执行详情 -->
+      <div class="rt-m-winner-summary">
+        <div class="rt-m-winner-row1">
+          <b>
+            <span class="ic">${renderProviderIcon(targetProv.toLowerCase(), targetProv[0])}</span>
+            <span class="pii">${escHtml(winnerWho)}</span>
+            <code class="mdl">${escHtml(targetMdl)}</code>
+          </b>
+          <span class="rt-m-winner-status">${statusBadge}</span>
+        </div>
+        <div class="rt-m-winner-row2">
+          <span>${t("rt_completed_in", { ms: rtTook(totalMs) })}</span>
+          <span>TTFT <b>${rtTook(ttftMs)}</b></span>
+          <span>${t("rt_speed_tok_s", { n: speed })}</span>
+          <span>Token <b>${fmtTokens(inTokens)}</b> in / <b>${fmtTokens(outTokens)}</b> out</span>
+        </div>
+      </div>
+    </div>
+  `;
+
+  pipelineEl.querySelectorAll(".rt-m-req-chip").forEach(btn => {
+    btn.onclick = () => {
+      const idx = Number(btn.dataset.idx);
+      if (routes[idx]) {
+        curRoutingPicked = routes[idx];
+        renderMagpieRouting(curMagpieRoutingData);
+      }
+    };
+  });
+  box.appendChild(pipelineEl);
+
+  // Top info (PC 端显示)
   const topEl = document.createElement("div");
   topEl.className = "rt-top";
   const orderList = curRoute.order || [];
@@ -4862,10 +6170,27 @@ function renderMagpieRouting(data) {
   }                                                                  // 报错转交/休息的座位不亮
   const enabledCount = orderList.filter(x => !x.fallback).length || orderList.length || 30;
   topEl.innerHTML = `
-    <div class="rt-what"><b>${escHtml(group.name || curRoute.provider || "default")}</b> · ${t("rt_routing_group_label")} · ${t("rt_unit_enabled", { n: enabledCount })} · ${t("rt_unit_agents", { n: recentAgents.length })}</div>
+    <div class="rt-what" style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
+      <b>${escHtml(group.name || curRoute.provider || "default")}</b> · ${t("rt_routing_group_label")} · ${t("rt_unit_enabled", { n: enabledCount })} · ${t("rt_unit_agents", { n: recentAgents.length })}
+      ${curRoutingPicked ? `
+        <span style="display:inline-flex;align-items:center;gap:6px;margin-left:auto;">
+          <span style="font-size:11.5px;color:var(--amber);background:rgba(255,159,10,0.1);padding:1px 7px;border-radius:4px;border:1px solid rgba(255,159,10,0.3);">
+            #${escHtml(String(curRoute.seq || curRoute.id || ""))} · ${escHtml(rtClock(curRoute.time) || "")}
+          </span>
+          <button type="button" class="btn-rt-live" id="btn-rt-live-top">▶ ${t("rt_tab_live")}</button>
+        </span>
+      ` : ""}
+    </div>
     <p class="rt-mode">${escHtml(modeInfo[1])}</p>
   `;
   box.appendChild(topEl);
+  const btnLiveTop = topEl.querySelector("#btn-rt-live-top");
+  if (btnLiveTop) {
+    btnLiveTop.onclick = () => {
+      curRoutingPicked = null;
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  }
 
   // Stage
   const stageEl = document.createElement("div");
@@ -4884,6 +6209,8 @@ function renderMagpieRouting(data) {
     node.className = "rt-node rt-src";
     const hue = rtHue(a.id);
     node.style.setProperty("--agent", hue);
+    node.title = `${a.name} · ${t("rt_tools_title")}`;
+    node.onclick = () => showRoutingToolsModal(curRoute);
     node.innerHTML = `
       <span class="rt-ic"><span class="ic">${renderProviderIcon(a.id, a.id[0])}</span></span>
       <b>${escHtml(a.name)}</b>
@@ -4906,110 +6233,86 @@ function renderMagpieRouting(data) {
     <svg viewBox="0 0 44 44" class="rt-bird" aria-hidden="true"><use href="#bird"></use></svg>
     <b>magpie</b>
     <small>127.0.0.1:3426</small>
-    <i>${escHtml(modeInfo[0])} ›</i>
+    <i class="rt-go" title="${escAttr(t("rt_policy_title"))}">${escHtml(modeInfo[0])}</i>
   `;
+  const hubGo = hubEl.querySelector("i.rt-go");
+  if (hubGo) {
+    hubGo.onclick = () => showRoutingPolicyModal(group.routing || "");
+  }
 
   // Accounts & candidate seats list
   const acctsEl = document.createElement("ol");
   acctsEl.className = "rt-accts";
 
-  const groupedSeats = [];
-  const pMap = new Map();
   orderList.forEach(w => {
-    const prov = w.name || w.provider || "other";
-    const model = w.model || "";
-    const key = prov + "::" + model;
-    if (!pMap.has(key)) {
-      const g = { prov, model, icon: w.icon || prov, items: [] };
-      pMap.set(key, g);
-      groupedSeats.push(g);
-    }
-    pMap.get(key).items.push(w);
-  });
+    const rowLi = document.createElement("li");
+    const rkey = seatKey(w);
+    const isTrying = tryState.trying.has(rkey);
+    const isAnswered = tryState.answered.has(rkey);
+    const isWinner = isTrying || isAnswered;
+    const isResting = !!w.rest;
 
-  groupedSeats.forEach(g => {
-    if (g.items.length > 1) {
-      const subLi = document.createElement("li");
-      subLi.className = "rt-sub";
-      subLi.dataset.key = g.prov;
-      subLi.innerHTML = `
-        <span class="ic">${renderProviderIcon(g.icon, g.prov[0])}</span>
-        <b>${escHtml(g.prov)}</b>
-        <span style="font-size:11px;color:var(--muted);">${t("rt_unit_accounts", { n: g.items.length })}</span>
-        <code class="mdl">${escHtml(g.model || "auto")}</code>
-        <i style="margin-left:auto;">${t("rt_unit_available", { n: g.items.filter(x => !x.rest).length })}</i>
-      `;
-      const subWire = document.createElementNS(NS, "path");
-      // 悬停分组行同样点亮它的连线
-      subLi.addEventListener("mouseenter", () => {
-        subWire.style.setProperty("--agent", rtHue(curRoute.agent));
-        subWire.classList.add("lit");
-      });
-      subLi.addEventListener("mouseleave", () => subWire.classList.remove("lit"));
-      wiresSvg.appendChild(subWire);
-      subLi.__wire = subWire;
-      acctsEl.appendChild(subLi);
+    if (isWinner) rowLi.classList.add("on");
+    if (isResting) rowLi.classList.add("rest");
+
+    let stText = "";
+    if (isTrying) stText = t("rt_answering");
+    else if (isAnswered) stText = t("rt_answered");
+    else if (isResting) stText = t("rt_resting");
+    else if (w.known && w.used !== undefined) {
+      const remain = Math.max(0, 100 - Math.round(w.used));
+      stText = `${t("rt_remain_pct", { n: remain })} · ${t("rt_renews_days", { n: 15 })}`;
+    } else if (w.credits) {
+      stText = `${Number(w.credits).toLocaleString()} · ${t("rt_remain_pct", { n: 40 })}`;
+    } else if (w.kind === "key") {
+      stText = t("rt_one_key");
+    } else {
+      stText = t("rt_ready");
     }
 
-    g.items.forEach(w => {
-      const rowLi = document.createElement("li");
-      if (g.items.length > 1) rowLi.dataset.up = g.prov;
-      const rkey = seatKey(w);
-      const isTrying = tryState.trying.has(rkey);
-      const isAnswered = tryState.answered.has(rkey);
-      const isWinner = isTrying || isAnswered;
-      const isResting = !!w.rest;
+    const whoStr = w.who || w.id || w.name || "account";
+    const usedPct = w.used !== undefined ? Math.min(100, Math.round(w.used)) : 0;
+    const barRemainPct = 100 - usedPct;
 
-      if (isWinner) rowLi.classList.add("on");
-      if (isResting) rowLi.classList.add("rest");
+    rowLi.innerHTML = `
+      <i class="dot"></i>
+      <b>
+        <span class="ic">${renderProviderIcon(w.icon || w.provider || "generic", (w.name || "M")[0])}</span>
+        <span class="who"><span class="pii">${escHtml(whoStr)}</span></span>
+        <span style="font-size:11px;color:var(--muted);margin-left:4px;">${escHtml(w.plan || "")}</span>
+        <code class="mdl">${escHtml(w.model || "")}</code>
+        ${w.fallback ? `<small class="fb">${t("rt_fallback")}</small>` : ""}
+      </b>
+      <em>${escHtml(stText)}</em>
+      <div class="bar"><i style="width:${barRemainPct}%;"></i></div>
+    `;
 
-      let stText = "";
-      if (isTrying) stText = t("rt_answering");
-      else if (isAnswered) stText = t("rt_answered");
-      else if (isResting) stText = t("rt_resting");
-      else if (w.known && w.used !== undefined) {
-        const remain = Math.max(0, 100 - Math.round(w.used));
-        stText = `${t("rt_remain_pct", { n: remain })} · ${t("rt_renews_days", { n: 15 })}`;
-      } else if (w.credits) {
-        stText = `${Number(w.credits).toLocaleString()} · ${t("rt_remain_pct", { n: 40 })}`;
-      } else if (w.kind === "key") {
-        stText = t("rt_one_key");
-      } else {
-        stText = t("rt_ready");
-      }
-
-      const whoStr = w.who || w.id || w.name || "account";
-      const usedPct = w.used !== undefined ? Math.min(100, Math.round(w.used)) : 0;
-      const barRemainPct = 100 - usedPct;
-
-      rowLi.innerHTML = `
-        <i class="dot"></i>
-        <b>
-          <span class="ic">${renderProviderIcon(w.icon || g.icon, (w.name || "M")[0])}</span>
-          <span class="who"><span class="pii">${escHtml(whoStr)}</span></span>
-          <span style="font-size:11px;color:var(--muted);margin-left:4px;">${escHtml(w.plan || "")}</span>
-          <code class="mdl">${escHtml(w.model || "")}</code>
-          ${w.fallback ? `<small class="fb">${t("rt_fallback")}</small>` : ""}
-        </b>
-        <em>${escHtml(stText)}</em>
-        <div class="bar"><i style="width:${barRemainPct}%;"></i></div>
-      `;
-
-      const rowWire = document.createElementNS(NS, "path");
-      if (isWinner) {
-        rowWire.classList.add("live");
-        rowWire.style.setProperty("--agent", rtHue(curRoute.agent));
-      }
-      // 悬停点亮该行的连线(默认全灰, 指到哪条哪条变绿): .lit 样式早就在 CSS 里
-      rowLi.addEventListener("mouseenter", () => {
-        rowWire.style.setProperty("--agent", rtHue(curRoute.agent));
-        rowWire.classList.add("lit");
-      });
-      rowLi.addEventListener("mouseleave", () => rowWire.classList.remove("lit"));
-      wiresSvg.appendChild(rowWire);
-      rowLi.__wire = rowWire;
-      acctsEl.appendChild(rowLi);
+    const rowWire = document.createElementNS(NS, "path");
+    if (isWinner) {
+      rowWire.classList.add("live");
+      rowWire.style.setProperty("--agent", rtHue(curRoute.agent));
+    }
+    rowLi.onclick = () => {
+      curRoutingAccountFilter = (curRoutingAccountFilter === whoStr ? null : whoStr);
+      renderMagpieRouting(curMagpieRoutingData);
+      const reqsList = $("rt-reqs-list");
+      if (reqsList) reqsList.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    };
+    if (curRoutingAccountFilter === whoStr) {
+      rowLi.classList.add("filtered");
+    }
+    // 悬停点亮该行的连线(默认全灰, 指到哪条哪条变绿)
+    rowLi.addEventListener("mouseenter", () => {
+      rowWire.style.setProperty("--agent", rtHue(curRoute.agent));
+      rowWire.classList.add("lit");
     });
+    rowLi.addEventListener("mouseleave", () => {
+      rowWire.classList.remove("lit");
+    });
+
+    wiresSvg.appendChild(rowWire);
+    rowLi.__wire = rowWire;
+    acctsEl.appendChild(rowLi);
   });
 
   const skySvg = document.createElementNS(NS, "svg");
@@ -5027,13 +6330,6 @@ function renderMagpieRouting(data) {
   const footEl = document.createElement("div");
   footEl.className = "rt-foot";
 
-  const totalMs = curRoute.ms || 0;
-  const ttftMs = curRoute.ttft || 0;
-  const outTokens = curRoute.out || (curRoute.tokens?.output || 0) || 1200;
-  const speed = (ttftMs && totalMs > ttftMs) ? Math.round(outTokens / ((totalMs - ttftMs) / 1000)) : 311;
-  const targetProv = curRoute.provider || "DeepSeek";
-  const targetMdl = curRoute.served || curRoute.model || "deepseek-flash";
-
   footEl.innerHTML = `
     <p class="rt-cap in">
       <b>${escHtml(targetProv)}</b> (${escHtml(targetMdl)}) ${t("rt_completed_in", { ms: rtTook(totalMs) })} · ${fmtTokens(curRoute.tokens?.input || curRoute.tokens || 0)} token · ${t("rt_first_resp", { ms: rtTook(ttftMs) })} · ${t("rt_speed_tok_s", { n: speed })} · ${t("rt_cache_hit_100")}
@@ -5046,6 +6342,19 @@ function renderMagpieRouting(data) {
   `;
   box.appendChild(footEl);
 
+  const errStat = footEl.querySelector(".rt-errs");
+  if (errStat) {
+    errStat.style.cursor = "pointer";
+    errStat.title = t("rt_show_latest_err");
+    errStat.onclick = () => {
+      const errRoute = routes.find(r => (r.status || 0) >= 400 || (r.tries || []).some(tr => (tr.status || 0) >= 400));
+      if (errRoute) {
+        curRoutingPicked = errRoute;
+        renderMagpieRouting(curMagpieRoutingData);
+      }
+    };
+  }
+
   // Log: Decision breakdown & timing
   const logEl = document.createElement("div");
   logEl.className = "rt-log";
@@ -5056,8 +6365,13 @@ function renderMagpieRouting(data) {
 
   logEl.innerHTML = `
     <div class="rt-log-head">
-      <span>${t("rt_log_title")}</span>
+      <span>${curRoutingPicked ? (t("rt_log_title") + " (" + (rtClock(curRoute.time) || "") + ")") : t("rt_log_title")}</span>
       <span class="grow"></span>
+      ${curRoutingPicked ? `
+        <button type="button" class="text" id="btn-back-to-live" style="color:var(--accent);font-size:12px;font-weight:600;margin-right:12px;cursor:pointer;">
+          ▶ ${t("rt_back_to_live")}
+        </button>
+      ` : ""}
       <span style="display:flex;gap:12px;font-size:11px;font-weight:400;color:var(--muted);">
         <span style="cursor:pointer;" onclick="document.querySelector('[data-atab=usage]')?.click()">${t("mp_view_detail")}</span>
         <span style="cursor:pointer;" onclick="refreshMagpieRouting(true)">↻</span>
@@ -5095,6 +6409,14 @@ function renderMagpieRouting(data) {
     </div>
   `;
   box.appendChild(logEl);
+
+  const btnBackLive = logEl.querySelector("#btn-back-to-live");
+  if (btnBackLive) {
+    btnBackLive.onclick = () => {
+      curRoutingPicked = null;
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  }
 
   // Context window waffle card
   const prompt = curRoute.prompt || {};
@@ -5146,6 +6468,9 @@ function renderMagpieRouting(data) {
   const ctxCard = document.createElement("div");
   ctxCard.className = "ctx-card";
   ctxCard.style.marginTop = "18px";
+  const filteredItems = (ctxActiveTab === "all") ? allItems : allItems.filter(it => it.kind === ctxActiveTab);
+  const displayItems = ctxShowAll ? filteredItems : filteredItems.slice(0, 10);
+
   ctxCard.innerHTML = `
     <div style="font-size:12.5px;color:var(--muted);margin-bottom:8px;">
       <span class="pii">${escHtml(curRoute.who || curRoute.id || "account")}</span> (${escHtml(targetMdl)}) high effort
@@ -5169,19 +6494,20 @@ function renderMagpieRouting(data) {
       <span><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--k-chat);margin-right:4px;"></i>${t("rt_tab_chat")} ${(chatTok/1000).toFixed(1)}K</span>
     </div>
     <div class="ctx-contents" style="margin-top:14px;border-top:1px solid var(--line);padding-top:10px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
         <span style="font-size:12px;font-weight:600;color:var(--fg);">${t("rt_ctx_content")}</span>
-        <div class="ctx-tabs" style="display:flex;gap:4px;font-size:11px;">
-          <span style="padding:2px 8px;border-radius:5px;background:var(--card-2);color:var(--fg);cursor:pointer;">${t("rt_tab_all")}</span>
-          <span style="padding:2px 8px;border-radius:5px;color:var(--muted);cursor:pointer;">${t("rt_tab_sys")}</span>
-          <span style="padding:2px 8px;border-radius:5px;color:var(--muted);cursor:pointer;">${t("rt_tab_tools")}</span>
-          <span style="padding:2px 8px;border-radius:5px;color:var(--muted);cursor:pointer;">${t("rt_tab_files")}</span>
-          <span style="padding:2px 8px;border-radius:5px;color:var(--muted);cursor:pointer;">${t("rt_tab_results")}</span>
-          <span style="padding:2px 8px;border-radius:5px;color:var(--muted);cursor:pointer;">${t("rt_tab_chat")}</span>
+        <button type="button" class="btn-rt-live" id="btn-show-tools-modal" style="font-size:11px;padding:2px 8px;">🛠 ${t("rt_tools_title")}</button>
+        <div class="ctx-tabs" style="display:flex;gap:4px;font-size:11px;margin-left:auto;">
+          <span data-tab="all" class="${ctxActiveTab === 'all' ? 'active' : ''}" style="padding:2px 8px;border-radius:5px;${ctxActiveTab === 'all' ? 'background:var(--card-2);color:var(--fg);font-weight:600;' : 'color:var(--muted);'}cursor:pointer;">${t("rt_tab_all")}</span>
+          <span data-tab="system" class="${ctxActiveTab === 'system' ? 'active' : ''}" style="padding:2px 8px;border-radius:5px;${ctxActiveTab === 'system' ? 'background:var(--card-2);color:var(--fg);font-weight:600;' : 'color:var(--muted);'}cursor:pointer;">${t("rt_tab_sys")}</span>
+          <span data-tab="tools" class="${ctxActiveTab === 'tools' ? 'active' : ''}" style="padding:2px 8px;border-radius:5px;${ctxActiveTab === 'tools' ? 'background:var(--card-2);color:var(--fg);font-weight:600;' : 'color:var(--muted);'}cursor:pointer;">${t("rt_tab_tools")}</span>
+          <span data-tab="files" class="${ctxActiveTab === 'files' ? 'active' : ''}" style="padding:2px 8px;border-radius:5px;${ctxActiveTab === 'files' ? 'background:var(--card-2);color:var(--fg);font-weight:600;' : 'color:var(--muted);'}cursor:pointer;">${t("rt_tab_files")}</span>
+          <span data-tab="results" class="${ctxActiveTab === 'results' ? 'active' : ''}" style="padding:2px 8px;border-radius:5px;${ctxActiveTab === 'results' ? 'background:var(--card-2);color:var(--fg);font-weight:600;' : 'color:var(--muted);'}cursor:pointer;">${t("rt_tab_results")}</span>
+          <span data-tab="chat" class="${ctxActiveTab === 'chat' ? 'active' : ''}" style="padding:2px 8px;border-radius:5px;${ctxActiveTab === 'chat' ? 'background:var(--card-2);color:var(--fg);font-weight:600;' : 'color:var(--muted);'}cursor:pointer;">${t("rt_tab_chat")}</span>
         </div>
       </div>
       <div class="ctx-rows" style="display:grid;gap:6px;max-height:220px;overflow-y:auto;">
-        ${allItems.slice(0, 10).map(it => `
+        ${displayItems.map(it => `
           <div style="display:flex;align-items:center;gap:8px;font-size:12px;padding:3px 0;">
             <i class="dot k-${it.kind}"></i>
             <b style="font-weight:500;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%;">${escHtml(it.name || "item")}</b>
@@ -5190,7 +6516,11 @@ function renderMagpieRouting(data) {
           </div>
         `).join("")}
       </div>
-      ${allItems.length > 10 ? `<div style="margin-top:8px;font-size:11px;color:var(--muted);text-align:left;cursor:pointer;">${t("rt_show_all", { n: allItems.length })}</div>` : ""}
+      ${filteredItems.length > 10 ? `
+        <div class="ctx-toggle-all" style="margin-top:8px;font-size:11px;color:var(--muted);text-align:left;cursor:pointer;">
+          ${ctxShowAll ? t("rt_show_fewer") : t("rt_show_all", { n: filteredItems.length })}
+        </div>
+      ` : ""}
       <div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--line);display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--muted);">
         <span>${escHtml(curRoute.agent || "Pi")} &gt; magpie-${escHtml(curRoute.id || "")} &gt; #${curRoute.conv || "1792153438952"}</span>
         <span>${t("rt_session_summary", { turns: 1, reqs: routes.length })}</span>
@@ -5199,14 +6529,35 @@ function renderMagpieRouting(data) {
   `;
   box.appendChild(ctxCard);
 
+  const btnShowTools = ctxCard.querySelector("#btn-show-tools-modal");
+  if (btnShowTools) {
+    btnShowTools.onclick = () => showRoutingToolsModal(curRoute);
+  }
+
+  ctxCard.querySelectorAll(".ctx-tabs span").forEach(sp => {
+    sp.onclick = () => {
+      ctxActiveTab = sp.dataset.tab || "all";
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  });
+  const btnToggleAll = ctxCard.querySelector(".ctx-toggle-all");
+  if (btnToggleAll) {
+    btnToggleAll.onclick = () => {
+      ctxShowAll = !ctxShowAll;
+      renderMagpieRouting(curMagpieRoutingData);
+    };
+  }
+
   // 2. Under the stage (#rtMore)
   if (more) {
+    const visibleRoutes = curRoutingAccountFilter ? routes.filter(r => (r.who || r.id || r.provider) === curRoutingAccountFilter) : routes;
+
     more.innerHTML = `
       <div class="rt-cols">
         <div class="rt-col">
           <div class="row-head">
             <span class="label">${t("rt_stat_requests")}</span>
-            <span class="note">${t("rt_reqs_note", { n: routes.length })}</span>
+            <span class="note">${t("rt_reqs_note", { n: visibleRoutes.length })}</span>
             <span class="grow"></span>
             <div style="display:flex;gap:4px;align-items:center;">
               <span class="rt-tab-btn ${!curRoutingPicked ? 'on' : ''}" id="rt-tab-live">${t("rt_tab_live")}</span>
@@ -5214,6 +6565,12 @@ function renderMagpieRouting(data) {
               <span class="rt-tab-btn">${t("rt_tab_by_req")}</span>
             </div>
           </div>
+          ${curRoutingAccountFilter ? `
+            <div class="rt-filter-bar">
+              <span>${t("rt_filter_account", { who: `<span class="pii">${escHtml(curRoutingAccountFilter)}</span>` })}</span>
+              <button type="button" class="btn-rt-clear-filter" id="btn-rt-clear-acct">${t("rt_clear_filter")}</button>
+            </div>
+          ` : ""}
           <div class="list rt-reqs" id="rt-reqs-list"></div>
         </div>
         <div class="rt-col">
@@ -5228,8 +6585,16 @@ function renderMagpieRouting(data) {
         <div class="row-head">
           <span class="label">${t("rt_groups_title")}</span>
           <span class="note">${t("rt_groups_note")}</span>
+          <span class="grow"></span>
+          <button type="button" class="text" id="btn-new-routing-group">＋ ${t("rt_new_group")}</button>
         </div>
         <div class="list rt-groups" id="rt-groups-list"></div>
+
+        <div class="row-head" style="margin-top:16px;">
+          <span class="label">${t("rt_pools_title")}</span>
+          <span class="note">${t("rt_pools_note")}</span>
+        </div>
+        <div class="list rt-pools" id="rt-pools-list"></div>
       </div>
     `;
 
@@ -5240,11 +6605,42 @@ function renderMagpieRouting(data) {
         renderMagpieRouting(curMagpieRoutingData);
       };
     }
+    const btnClearAcct = $("btn-rt-clear-acct");
+    if (btnClearAcct) {
+      btnClearAcct.onclick = () => {
+        curRoutingAccountFilter = null;
+        renderMagpieRouting(curMagpieRoutingData);
+      };
+    }
+
+    const btnNewG = $("btn-new-routing-group");
+    if (btnNewG) {
+      btnNewG.onclick = () => {
+        if (curRoutingGroupEdit && curRoutingGroupEdit.id === "") {
+          curRoutingGroupEdit = null;
+        } else {
+          curRoutingGroupEdit = {
+            id: "",
+            draft: {
+              name: "",
+              id: "",
+              members: ["codex/gpt-6-luna", "deepseek/deepseek-flash"],
+              routing: "",
+              affinity: "",
+              effort: "",
+              rules: [{ use: "codex/gpt-6-luna", tokens: 0, images: false, effort: "", agents: [], intent: "" }],
+              classifier: ""
+            }
+          };
+        }
+        renderMagpieRouting(curMagpieRoutingData);
+      };
+    }
 
     // Populate requests list
     const reqsListEl = $("rt-reqs-list");
     if (reqsListEl) {
-      reqsListEl.innerHTML = routes.map((r, i) => {
+      reqsListEl.innerHTML = visibleRoutes.map((r, i) => {
         const isPick = curRoute.id === r.id;
         const ag = r.agent || "pi";
         const timeStr = rtClock(r.time) || "23:53:14";
@@ -5274,8 +6670,8 @@ function renderMagpieRouting(data) {
       reqsListEl.querySelectorAll(".rt-req").forEach(row => {
         row.onclick = () => {
           const idx = parseInt(row.dataset.idx, 10);
-          if (!isNaN(idx) && routes[idx]) {
-            curRoutingPicked = routes[idx];
+          if (!isNaN(idx) && visibleRoutes[idx]) {
+            curRoutingPicked = visibleRoutes[idx];
             renderMagpieRouting(curMagpieRoutingData);
           }
         };
@@ -5285,6 +6681,20 @@ function renderMagpieRouting(data) {
     // Populate accounts summary
     const actsListEl = $("rt-acts-list");
     if (actsListEl) {
+      const groupedSeats = [];
+      const pMap = new Map();
+      orderList.forEach(w => {
+        const prov = w.name || w.provider || "other";
+        const model = w.model || "";
+        const key = prov + "::" + model;
+        if (!pMap.has(key)) {
+          const g = { prov, model, icon: w.icon || prov, items: [] };
+          pMap.set(key, g);
+          groupedSeats.push(g);
+        }
+        pMap.get(key).items.push(w);
+      });
+
       actsListEl.innerHTML = groupedSeats.map(g => {
         return `
           <div class="rt-prov">
@@ -5309,37 +6719,120 @@ function renderMagpieRouting(data) {
       }).join("");
     }
 
-    // Populate routing groups
+    // Populate routing groups & inline editor
     const groupsListEl = $("rt-groups-list");
     if (groupsListEl) {
-      const gItems = groups.length ? groups : [
-        { name: "default", routing: "smart", members: ["kiro/auto", "workbuddy-ai/deepseek-v4.1-flash", "codex/gpt-6-luna", "deepseek/deepseek-flash"] },
-        { name: "high", routing: "order", members: ["codex/gpt-6-luna", "deepseek/deepseek-flash"] },
-        { name: "free", routing: "smart", members: ["our-free-model/free", "opencode-zen/free"] }
+      const gItems = (data.groups && data.groups.length) ? data.groups : [
+        { id: "default", name: "default", routing: "smart", affinity: "session", members: ["kiro/auto", "workbuddy-ai/deepseek-v4.1-flash", "codex/gpt-6-luna", "deepseek/deepseek-flash"], rules: [{ use: "codex/gpt-6-luna", tokens: 20000, intent: "coding and planning" }] },
+        { id: "high", name: "high", routing: "order", affinity: "", members: ["codex/gpt-6-luna", "deepseek/deepseek-flash"], rules: [{ use: "codex/gpt-6-luna", effort: "high" }] },
+        { id: "free", name: "free", routing: "smart", affinity: "", members: ["our-free-model/free", "opencode-zen/free"], rules: [] }
       ];
-      groupsListEl.innerHTML = gItems.map(g => `
-        <div class="rt-group">
-          <div class="main">
+
+      const availableModels = (data.models && data.models.length) ? data.models : [
+        { id: "codex/gpt-6-luna", name: "gpt-6-luna", providerName: "Codex", icon: "bolt" },
+        { id: "deepseek/deepseek-flash", name: "deepseek-flash", providerName: "DeepSeek", icon: "spark" },
+        { id: "kiro/auto", name: "auto", providerName: "Kiro", icon: "spark" },
+        { id: "openrouter/anthropic/claude-sonnet-5.5", name: "claude-sonnet-5.5", providerName: "OpenRouter", icon: "network" },
+        { id: "workbuddy-ai/deepseek-v4.1-flash", name: "deepseek-v4.1-flash", providerName: "WorkBuddy AI", icon: "cpu" },
+        { id: "our-free-model/free", name: "free", providerName: "Our Free Model", icon: "box" }
+      ];
+
+      const availableDeciders = (data.deciders && data.deciders.length) ? data.deciders : [
+        { id: "opencode-zen/jev-1.13-free", name: "jev-1.13-free", providerName: "OpenCode Zen" }
+      ];
+
+      const rowsHtml = [];
+      if (curRoutingGroupEdit && curRoutingGroupEdit.id === "") {
+        rowsHtml.push(renderGroupEditorHtml(null, curRoutingGroupEdit.draft, availableModels, availableDeciders));
+      }
+
+      for (const g of gItems) {
+        const gid = g.id || g.name;
+        if (curRoutingGroupEdit && curRoutingGroupEdit.id === gid) {
+          rowsHtml.push(renderGroupEditorHtml(g, curRoutingGroupEdit.draft, availableModels, availableDeciders));
+        } else {
+          rowsHtml.push(renderGroupRowHtml(g, (curRoutingGroupFilter === gid) || (!curRoutingGroupFilter && gid === (group.name || "default"))));
+        }
+      }
+
+      groupsListEl.innerHTML = rowsHtml.join("");
+      bindGroupEvents(groupsListEl, gItems, availableModels, availableDeciders);
+    }
+
+    // Populate Accounts and Keys Pools
+    const poolsContainer = $("rt-pools-list");
+    if (poolsContainer) {
+      const pools = (data.pools && data.pools.length) ? data.pools : [
+        // 回退演示数据：绝不写真实邮箱，账户名一律用不透明标签。
+        { provider: "workbuddy-ai", name: "WorkBuddy AI", icon: "cpu", kind: "account", who: ["wba-acct-1", "wba-acct-2", "wba-acct-3", "wba-acct-4", "wba-acct-5", "wba-acct-6"], routing: "usage", affinity: "" },
+        { provider: "kiro", name: "Kiro", icon: "spark", kind: "account", who: ["kiro-acct-1", "kiro-acct-2", "kiro-acct-3", "kiro-acct-4"], routing: "", affinity: "" },
+        { provider: "workbuddy", name: "WorkBuddy", icon: "cpu", kind: "account", who: ["wb-account-1", "wb-account-2"], routing: "", affinity: "" },
+        { provider: "qoder", name: "Qoder", icon: "bolt", kind: "account", who: ["qoder-acct-1", "qoder-acct-2", "qoder-acct-3"], routing: "", affinity: "" }
+      ];
+
+      poolsContainer.innerHTML = pools.map(p => {
+        const whoList = p.who || [];
+        const countStr = p.kind === "account" ? `${whoList.length} accounts` : `${whoList.length} keys`;
+        const pRouting = p.routing || "";
+        const pAffinity = p.affinity || "";
+
+        return `
+          <div class="rt-pool" data-prov="${escAttr(p.provider)}">
             <div class="nm">
-              <b>${escHtml(g.name || "default")}</b>
-              <code class="mdl">group/${escHtml(g.name || "default")}</code>
-              <small class="auto" style="margin-left:auto;">${escHtml(modesMap[g.routing || ""]?.[0] || t("rt_mode_smart"))}</small>
+              <span class="ic">${renderProviderIcon(p.icon || p.provider, p.name[0])}</span>
+              <b>${escHtml(p.name)}</b>
+              <span>${countStr}</span>
             </div>
-            <div class="mem">${escHtml((g.members || []).join(" · "))}</div>
+            <div class="ctl">
+              <span class="lab">
+                <small>${t("rt_routing_lbl")}</small>
+                <div class="segs pool-routing-segs" data-prov="${escAttr(p.provider)}">
+                  ${ROUTE_OPTS.map(([k, lbl]) => `
+                    <span class="opt ${pRouting === k ? 'on' : ''}" data-val="${k}">${escHtml(t(modesMap[k]?.[0] || lbl))}</span>
+                  `).join("")}
+                </div>
+              </span>
+              <span class="lab">
+                <small>${t("rt_stays_lbl")}</small>
+                <div class="segs pool-affinity-segs" data-prov="${escAttr(p.provider)}">
+                  ${AFF_OPTS.map(([k, lbl]) => `
+                    <span class="opt ${pAffinity === k ? 'on' : ''}" data-val="${k}">${escHtml(lbl)}</span>
+                  `).join("")}
+                </div>
+              </span>
+            </div>
           </div>
-        </div>
-      `).join("");
+        `;
+      }).join("");
+
+      poolsContainer.querySelectorAll(".pool-routing-segs .opt").forEach(opt => {
+        opt.onclick = () => {
+          const prov = opt.closest(".segs").dataset.prov;
+          const val = opt.dataset.val;
+          const p = pools.find(x => x.provider === prov);
+          if (p) {
+            p.routing = val;
+            renderMagpieRouting(curMagpieRoutingData);
+          }
+        };
+      });
+
+      poolsContainer.querySelectorAll(".pool-affinity-segs .opt").forEach(opt => {
+        opt.onclick = () => {
+          const prov = opt.closest(".segs").dataset.prov;
+          const val = opt.dataset.val;
+          const p = pools.find(x => x.provider === prov);
+          if (p) {
+            p.affinity = val;
+            renderMagpieRouting(curMagpieRoutingData);
+          }
+        };
+      });
     }
   }
 
   requestAnimationFrame(() => {
     layoutRoutingWires();
-    // 列表限高内滚: 滚动态更新底部渐隐(首次渲染后先按初始位置算一次)
-    const accts = box.querySelector(".rt-accts");
-    if (accts) {
-      accts.addEventListener("scroll", () => rtAcctsFade(accts), { passive: true });
-      rtAcctsFade(accts);
-    }
   });
 
   if (!routingResizeObs && window.ResizeObserver) {
@@ -5487,9 +6980,9 @@ function renderMagpieProviders(data) {
 
     let subText = "";
     if (user) {
-      subText = t("mp_signed_in_as", { user }) + " · " + modelsText;
+      subText = t("mp_signed_in_as", { user: `<span class="pii">${escHtml(user)}</span>` }) + " · " + modelsText;
     } else if (pv.host) {
-      subText = pv.host + " · " + modelsText;
+      subText = `<span class="pii">${escHtml(pv.host)}</span> · ` + modelsText;
     } else {
       subText = modelsText;
     }
@@ -5507,8 +7000,9 @@ function renderMagpieProviders(data) {
       } else {
         statusLabel = t("mp_signed_in");
       }
-    } else if (pv.keyList && pv.keyList.length > 0) {
-      statusLabel = pv.keyList[0].masked || "••••••";
+    } else if ((pv.keyList && pv.keyList.length > 0) || (pv.key && pv.key.masked)) {
+      const kObj = (pv.keyList && pv.keyList.length > 0) ? pv.keyList[0] : pv.key;
+      statusLabel = kObj.masked || "••••••";
       isMonoKey = true;
     } else if (pv.id === "grok") {
       statusLabel = "SuperGrok";
@@ -5527,6 +7021,8 @@ function renderMagpieProviders(data) {
       `;
     }).join("");
 
+    const displayKeyLabel = (BOOT.static && isMonoKey) ? "••••••" : statusLabel;
+
     return `
       <div class="mp-pv-row ${isOff ? 'off' : ''}">
         <div class="mp-pv-icon-wrap">
@@ -5534,13 +7030,13 @@ function renderMagpieProviders(data) {
         </div>
         <div class="mp-pv-who">
           <div class="mp-pv-name">${escHtml(pv.name || pv.id)}</div>
-          <div class="mp-pv-sub">${escHtml(subText)}</div>
+          <div class="mp-pv-sub">${subText}</div>
         </div>
         <div class="mp-pv-right">
           ${usesHtml ? `<div class="mp-pv-uses">${usesHtml}</div>` : ""}
           <div class="mp-pv-status-pill ${isMonoKey ? 'mono' : ''}">
             <span class="mp-pv-status-dot ${isOff ? 'off' : ''}"></span>
-            <span title="${escAttr(statusLabel)}">${escHtml(statusLabel)}</span>
+            <span class="${isMonoKey ? 'pii is-masked' : ''}" title="${escAttr(displayKeyLabel)}">${escHtml(displayKeyLabel)}</span>
           </div>
         </div>
       </div>
@@ -5670,15 +7166,9 @@ function bindAgentSubnav() {
   const btnMask = $("mp-btn-mask");
   if (btnMask && !btnMask.dataset.bound) {
     btnMask.dataset.bound = "1";
-    btnMask.classList.toggle("active", curAccountMasked);
+    btnMask.classList.toggle("active", routingMaskAccounts);
     btnMask.addEventListener("click", () => {
-      curAccountMasked = !curAccountMasked;
-      btnMask.classList.toggle("active", curAccountMasked);
-      const lbl = $("mp-mask-label");
-      if (lbl) lbl.textContent = curAccountMasked ? t("mp_mask_toggle") : t("mp_show_accounts");
-      document.querySelectorAll(".mp-acc-email").forEach(el => {
-        el.classList.toggle("is-masked", curAccountMasked);
-      });
+      setGlobalAccountsMask(!routingMaskAccounts);
     });
   }
 
@@ -7173,18 +8663,18 @@ function initToolsPage() {
 
 // --- 桌面端分类条(右上角 #catbar): 概览/活动/Tmux/Agent/服务; 移动端隐藏(底部页签) ---
 const CATS = [
-  ["home", "tab_home"], ["activity", "tab_activity"], ["tmux", "tab_tmux"],
+  ["home", "tab_home"], ["activity", "tab_activity"], ["tmux", "nav_tasks"],
   ["agent", "tab_agent"], ["svc", "tab_svc"],
 ];
 const CAT_SELS = {
-  home: ["#sysbar", "#chart-wrap", "#hp-portal-grid", "#toolchips"],
+  home: ["#sysbar", "#chart-wrap", "#hp-vms-grid", "#hp-portal-grid", "#toolchips"],
   activity: ["#activity-page"],
   tmux: ["#tmux-panel"],
   goal: ["#tmux-panel"],
   agent: ["#agents-page"],
   manage: ["#agents-page"],
-  svc: ["#filters", "#network-page", "#tasks", "#svc-panel", "#cron-panel", "#logpage"],
-  network: ["#filters", "#network-page", "#tasks", "#svc-panel", "#cron-panel", "#logpage"],
+  svc: ["#svc-head", "#svc-subnav", "#filters", "#network-page", "#tasks", "#svc-panel", "#cron-panel", "#logpage"],
+  network: ["#svc-head", "#svc-subnav", "#filters", "#network-page", "#tasks", "#svc-panel", "#cron-panel", "#logpage"],
 };
 var curCat = "all";
 function setCat(c, save) {
@@ -7206,6 +8696,7 @@ function setCat(c, save) {
   if (c === "tmux" || c === "goal") {
     const tp = $("tmux-panel");
     if (tp) tp.hidden = false;
+    tmuxInitSubnav();
     renderTmuxPage();
   }
   if (c === "svc") {
@@ -7279,7 +8770,7 @@ window.addEventListener("hashchange", () => {   // 手改 hash/后退也跟随
 // --- 静态快照: 所有脱敏占位符打马赛克(只读, 不可取消) ---
 // BOOT.redactRe 由服务端按语言生成(privacy.redact_marker_re), 覆盖全部占位文案
 // BOOT.redactRe 由服务端按语言生成, 覆盖全部脱敏占位符; 兜底正则兜住发布器后处理产生的标记
-const FALLBACK_REDACT_RE = "\\[[^\\[\\n]{0,60}?(?:已脱敏|已隐藏|已屏蔽|非公開|redacted|hidden)\\]|\\b[A-Za-z0-9]{1,4}\\*{3}[A-Za-z0-9]{0,3}|\\*{3}REDACTED\\*{3}";
+const FALLBACK_REDACT_RE = "\\[[^\\[\\n]{0,60}?(?:\\u5df2\\u8131\\u654f|\\u5df2\\u9690\\u85cf|\\u5df2\\u5c4f\\u853d|\\u975e\\u516c\\u958b|redacted|hidden)\\]|\\b[A-Za-z0-9]{1,4}\\*{3}[A-Za-z0-9]{0,3}|\\*{3}REDACTED\\*{3}";
 let _redactRe = null;
 if (BOOT.static && BOOT.redactRe) {
   try { _redactRe = new RegExp(BOOT.redactRe, "g"); } catch (e) { _redactRe = null; }
@@ -7337,14 +8828,16 @@ function schedStaticRedaction() {
   clearTimeout(_redactTimer);
   _redactTimer = setTimeout(() => applyStaticRedaction(document.body), 150);
 }
-if (BOOT.static && _redactRe) {
-  // 静态页移除「隐藏账号」切换: 路由图账号默认打码且不可取消
-  const _maskBtn = $("rtMask");
-  if (_maskBtn) _maskBtn.remove();
-  schedStaticRedaction();
-  new MutationObserver(schedStaticRedaction).observe(document.body, {
-    childList: true, subtree: true, characterData: true
-  });
+if (BOOT.static) {
+  document.body.classList.add("is-static", "masking");
+  $("rtMask")?.remove();
+  $("mp-btn-mask")?.remove();
+  if (_redactRe) {
+    schedStaticRedaction();
+    new MutationObserver(schedStaticRedaction).observe(document.body, {
+      childList: true, subtree: true, characterData: true
+    });
+  }
 }
 
 // --- 启动 ---
@@ -7367,6 +8860,7 @@ initLogAgentPicker();   // 延后到这里: escHtml 等 const 已初始化(避�
 initLanguageMenu();
 setupMagpieLinks();
 load(true);
+loadVms();
 renderConnbar();   // 顶栏连接信息(ssh/IP)随首屏渲染, 不等进工具页
 // AI 清理: 首页面板按钮 + 弹层关闭(独立于工具页惰性初始化, 首页直达)
 $("hp-aiclean-run")?.addEventListener("click", aiCleanHome);
@@ -7375,3 +8869,1214 @@ $("aiclean-modal")?.addEventListener("click", e => { if (e.target.id === "aiclea
 $("aiclean-modal-rerun")?.addEventListener("click", aiRerun);
 aiStatusChip();
 hydrateFragments();
+
+// ================= TaskHub：任务（Issue）/ 执行日志 =================
+// 数据来自本机 TaskHub 引擎(经 svc-dashboard 后端 /api/th/* 转发)；界面完全复用
+// 仪表盘的样式与组件，任务只是"活动"里的一个小 tab。
+
+
+async function thGet(path) {
+  try {
+    const r = await fetch(path, { cache: "no-store" });
+    return await r.json();
+  } catch (e) {
+    return { ok: false, msg: String(e) };
+  }
+}
+
+function thAgo(iso) {
+  if (!iso) return "—";
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (!isFinite(s)) return "—";
+  if (s < 60) return `刚刚`;
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+  return `${Math.floor(s / 86400)} 天前`;
+}
+
+function thStateLabel(state) {
+  const map = { queued: `排队`, starting: `启动中`, running: `运行中`, waiting_user: `运行中`,
+                succeeded: `完成`, failed: `失败`, cancelled: `已停止`, lost: `已丢失` };
+  return map[state] || state || "—";
+}
+
+function thHostChip(run) {
+  if (!run) return "";
+  const hosts = (TH.hosts && TH.hosts.hosts) || [];
+  const h = hosts.find(x => x.id === (run.host || "")) || {};
+  const on = h.online !== false;
+  return `<span class="chip th-chip th-host ${on ? "th-on" : "th-off"}" title="${on ? escHtml(t("th_online")) : escHtml(t("th_offline"))}">
+    ${icon("host", 12)}${escHtml(h.label || run.host || t("th_local"))}</span>`;
+}
+
+function thStateChip(run) {
+  if (!run) return "";
+  return `<span class="chip th-chip th-st th-${escHtml(run.state || "")}">${escHtml(thStateLabel(run.state))}</span>`;
+}
+
+function tmuxSetTab() { thRenderTasks(); }
+
+function tmuxInitSubnav() {
+  const bar = $("tmux-subnav");
+  if (bar && !bar.dataset.wired) {
+    bar.dataset.wired = "1";
+    bar.addEventListener("click", ev => {
+      const btn = ev.target.closest(".page-subnav-btn");
+      if (!btn || !btn.dataset.ttab) return;
+      const tab = btn.dataset.ttab;
+      bar.querySelectorAll(".page-subnav-btn").forEach(b => b.classList.toggle("active", b === btn));
+      const vTasks = $("tmux-view-tasks");
+      const vSessions = $("tmux-view-sessions");
+      if (tab === "tasks") {
+        if (vTasks) { vTasks.hidden = false; vTasks.style.display = ""; }
+        if (vSessions) { vSessions.hidden = true; vSessions.style.display = "none"; }
+        thRenderTasks();
+      } else {
+        if (vTasks) { vTasks.hidden = true; vTasks.style.display = "none"; }
+        if (vSessions) { vSessions.hidden = false; vSessions.style.display = ""; }
+        if (typeof renderTmuxPage === "function") renderTmuxPage();
+      }
+    });
+  }
+
+  // 绑定新建任务主按钮
+  const btnNew = $("btn-th-new-task") || $("btn-tmux-new-open");
+  if (btnNew && !btnNew.dataset.wired) {
+    btnNew.dataset.wired = "1";
+    btnNew.addEventListener("click", () => thNewTaskModal());
+  }
+
+  // 绑定全量刷新按钮
+  const btnRefresh = $("btn-th-refresh-all");
+  if (btnRefresh && !btnRefresh.dataset.wired) {
+    btnRefresh.dataset.wired = "1";
+    btnRefresh.addEventListener("click", () => {
+      const vTasks = $("tmux-view-tasks");
+      if (vTasks && !vTasks.hidden) {
+        TH.health = null;
+        thRenderTasks();
+      } else if (typeof renderTmuxPage === "function") {
+        renderTmuxPage();
+      }
+    });
+  }
+
+  thEnsureBase();
+  thRenderTasks();
+  thStartWatcher();
+  thUpdateTmuxBadge();
+}
+
+async function thUpdateTmuxBadge() {
+  const b = $("n-ttab-sessions");
+  if (!b) return;
+  const d = await thGet("/api/tmux").catch(() => null);
+  if (d && d.sessions) {
+    b.textContent = String(d.sessions.length);
+  }
+}
+
+/* GitHub 没有 webhook 到内网，所以列表靠轮询保持新鲜：
+   45s 一次 gh issue list，只有数量/状态/run 发生变化才重绘，避免打扰正在看的详情。 */
+function thStartWatcher() {
+  if (TH.watch || BOOT.static) return;
+  TH.watch = setInterval(async () => {
+    if (document.hidden || TH.busy) return;
+    const pane = $("tmux-view-tasks");
+    if (!pane || pane.offsetParent === null) return;
+    TH.busy = true;
+    try {
+      const d = await thGet("/api/th/issues?mode=all");
+      if (d.ok === false) return;
+      const sig = (d.issues || [])
+        .map(i => `${i.number}:${i.state}:${i.updatedAt}:${i.run ? i.run.state + i.run.id : ""}`)
+        .join(",");
+      if (sig && sig !== TH.sig) { TH.sig = sig; thRenderTasks(true); }
+    } finally { TH.busy = false; }
+  }, 45000);
+}
+
+function thEnsureBase() {
+  return Promise.all([
+    TH.hosts ? Promise.resolve(TH.hosts) : thGet("/api/th/hosts").then(d => (TH.hosts = d)),
+    TH.health ? Promise.resolve(TH.health) : thGet("/api/th/health").then(d => (TH.health = d)),
+  ]);
+}
+
+/* 桌面左右两列各自滚动：容器高度 = 视口 - 面板顶部，窗口尺寸变化时重算 */
+function thFitSplit() {
+  const split = document.querySelector("#tmux-panel .th-split");
+  if (!split) return;
+  if (!window.matchMedia("(min-width: 701px)").matches) {
+    split.style.removeProperty("--th-split-h");
+    return;
+  }
+  let top = 0, el = split;
+  while (el) { top += el.offsetTop; el = el.offsetParent; }
+  const apply = extra => split.style.setProperty(
+    "--th-split-h", Math.max(320, Math.round(window.innerHeight - top - 18 - extra)) + "px");
+  apply(0);
+  requestAnimationFrame(() => {
+    const over = document.scrollingElement.scrollHeight - window.innerHeight;
+    if (over > 0) apply(over);
+  });
+}
+window.addEventListener("resize", () => {
+  clearTimeout(TH.fitT);
+  TH.fitT = setTimeout(thFitSplit, 120);
+});
+
+const TH_ACTIVE = new Set(["queued", "starting", "running", "waiting_user"]);
+const TH_DISPATCH_KEY = "svc-th-dispatch";   // 上次派发选的执行者 / 机器
+const TH_STAGE_ORDER = ["analyze", "plan", "implement", "test", "commit", "pr", "done"];
+
+function thHostName(run) {
+  if (!run) return "";
+  const hosts = (TH.hosts && TH.hosts.hosts) || [];
+  const h = hosts.find(x => x.id === run.host) || {};
+  return h.label || run.host || t("th_local");
+}
+
+function thCardMeta(parts) {
+  return `<div class="th-meta">${parts.filter(Boolean).map(x => `<span>${x}</span>`).join('<i class="th-dot"></i>')}</div>`;
+}
+
+function thPercent(run) {
+  if (!run) return 0;
+  if (typeof run.progress === "number" && run.progress > 0) return Math.min(100, run.progress);
+  const idx = TH_STAGE_ORDER.indexOf(run.stage || "");
+  return idx < 0 ? 0 : Math.round(((idx + 1) / TH_STAGE_ORDER.length) * 100);
+}
+
+function thFormatDuration(sec) {
+  if (!sec || sec < 0) return "";
+  const s = Math.round(sec);
+  if (s < 60) return `${s}秒`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  if (m < 60) return rem ? `${m}分${rem}秒` : `${m}分钟`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return `${h}小时${rm}分`;
+}
+
+/* ---------------- 任务列表：支持状态过滤与精简卡片 ---------------- */
+async function thRenderTasks(silent) {
+  const box = $("th-tasks"); if (!box) return;
+  if (BOOT.static) {
+    const items = (BOOT.thTasks && BOOT.thTasks.items) || [];
+    box.innerHTML = items.length ? `
+      <div class="th-group">
+        <div class="th-group-head"><span class="th-group-title">${escHtml(t("th_open"))}</span>
+          <span class="th-group-n">${items.length}</span></div>
+        <div class="th-cards">${items.map((it, i) => `
+          <div class="th-card th-row th-static-row" data-th-static="${i}" role="button" tabindex="0">
+            <div class="th-title">${escHtml(it.title)}</div>
+            ${it.excerpt ? `<div class="th-excerpt">${escHtml(it.excerpt)}</div>` : ""}
+          </div>`).join("")}</div>
+      </div>` : `<div class="gempty">${escHtml(t("th_empty"))}</div>`;
+    box.querySelectorAll("[data-th-static]").forEach(el => el.addEventListener("click", () => {
+      box.querySelectorAll(".th-row").forEach(x => x.classList.toggle("selected", x === el));
+      thStaticDetail(items[Number(el.dataset.thStatic)] || {});
+    }));
+    if (items.length && window.matchMedia("(min-width: 701px)").matches) {
+      box.querySelector(".th-row")?.classList.add("selected");
+      thStaticDetail(items[0]);
+    }
+    return;
+  }
+
+  const keep = silent ? TH.taskView : null;
+  const wide = window.matchMedia("(min-width: 701px)").matches;
+  box.hidden = false;
+  const det = $("th-detail");
+  if (det && !wide && !TH.taskView) det.hidden = true;
+  if (!TH.taskView) TH.taskView = null;
+  if (!TH.filter) TH.filter = "active";
+
+  box.innerHTML = `<div class="th-skeleton"><i></i><i></i><i></i></div>`;
+  const d = await thGet("/api/th/issues?mode=all");
+  if (d.ok === false) { box.innerHTML = `<div class="gempty t-red">${escHtml(d.msg || `无法读取任务`)}</div>`; return; }
+  const items = d.issues || [];
+  const running = items.filter(i => i.run && TH_ACTIVE.has(i.run.state));
+  const pending = items.filter(i => !i.run && i.state === "open");
+  const done = items.filter(i => !running.includes(i) && !pending.includes(i));
+
+  // 更新子导航角标
+  const badgeEl = $("n-ttab-tasks");
+  if (badgeEl) {
+    badgeEl.textContent = running.length ? `⚡${running.length}` : String(running.length + pending.length);
+  }
+
+  // 顶部筛选 Chips
+  const curF = TH.filter;
+  const filterBarHtml = `
+    <div class="th-filter-bar">
+      <span class="th-filter-chip${curF === 'active' ? ' active' : ''}" data-tf="active">
+        活跃任务 <span class="th-filter-count">${running.length + pending.length}</span>
+      </span>
+      <span class="th-filter-chip${curF === 'running' ? ' active' : ''}" data-tf="running">
+        ⚡ 运行中 <span class="th-filter-count">${running.length}</span>
+      </span>
+      <span class="th-filter-chip${curF === 'pending' ? ' active' : ''}" data-tf="pending">
+        待派发 <span class="th-filter-count">${pending.length}</span>
+      </span>
+      <span class="th-filter-chip${curF === 'done' ? ' active' : ''}" data-tf="done">
+        已完成 <span class="th-filter-count">${done.length}</span>
+      </span>
+      <span class="th-filter-chip${curF === 'all' ? ' active' : ''}" data-tf="all">
+        全部 <span class="th-filter-count">${items.length}</span>
+      </span>
+    </div>`;
+
+  const group = (key, title, list, open) => {
+    if (!list.length) return "";
+    return `
+      <section class="th-group">
+        <button class="th-group-head" type="button" data-th-group="${key}">
+          <span class="th-group-title">${escHtml(title)}</span>
+          <span class="th-group-n">${list.length}</span>
+          <span class="th-group-caret">${open ? `收起` : `展开`}</span>
+        </button>
+        <div class="th-cards" ${open ? "" : "hidden"}>${list.map(i => thTaskCard(i, key)).join("")}</div>
+      </section>`;
+  };
+
+  let groupsHtml = "";
+  if (curF === "active") {
+    groupsHtml += group("running", `正在跑`, running, true);
+    groupsHtml += group("pending", `待派发`, pending, true);
+    if (!running.length && !pending.length) {
+      groupsHtml += `<div class="gempty">暂无活跃任务 · 点上方「下发新任务」开始</div>`;
+    }
+  } else if (curF === "running") {
+    groupsHtml += group("running", `正在跑`, running, true);
+    if (!running.length) groupsHtml += `<div class="gempty">暂无正在运行的任务</div>`;
+  } else if (curF === "pending") {
+    groupsHtml += group("pending", `待派发`, pending, true);
+    if (!pending.length) groupsHtml += `<div class="gempty">暂无待派发任务</div>`;
+  } else if (curF === "done") {
+    groupsHtml += group("done", `已完成`, done, true);
+    if (!done.length) groupsHtml += `<div class="gempty">暂无已完成任务</div>`;
+  } else {
+    groupsHtml += group("running", `正在跑`, running, true);
+    groupsHtml += group("pending", `待派发`, pending, true);
+    groupsHtml += group("done", `已完成`, done, false);
+  }
+
+  box.innerHTML = filterBarHtml + groupsHtml;
+
+  // 绑定过滤器点击
+  box.querySelectorAll("[data-tf]").forEach(el => el.addEventListener("click", () => {
+    TH.filter = el.dataset.tf;
+    thRenderTasks();
+  }));
+
+  // 展开折叠
+  box.querySelectorAll("[data-th-group]").forEach(h => h.addEventListener("click", () => {
+    const cards = h.nextElementSibling; if (!cards) return;
+    cards.hidden = !cards.hidden;
+    h.querySelector(".th-group-caret").textContent = cards.hidden ? `展开` : `收起`;
+  }));
+
+  // 点击任务行
+  box.querySelectorAll("[data-th-open]").forEach(el => el.addEventListener("click", ev => {
+    ev.stopPropagation(); thOpenTask(Number(el.dataset.thOpen));
+  }));
+
+  if (wide && !TH.taskView) {
+    const first = running[0] || pending[0] || done[0];
+    if (first) thOpenTask(first.number, true);
+  } else if (keep && box.querySelector(`[data-th-open="${keep}"]`)) {
+    box.querySelectorAll(".th-row").forEach(el => el.classList.toggle("selected", Number(el.dataset.thOpen) === keep));
+  }
+
+  box.querySelectorAll("[data-th-act]").forEach(el => {
+    el.addEventListener("click", ev => {
+      ev.stopPropagation();
+      const n = Number(el.dataset.num), kind = el.dataset.thAct;
+      if (kind === "dispatch") thDispatchModal(n, { title: el.dataset.title || "" });
+      if (kind === "restore") thSetState(n, "open");
+      if (kind === "cancel") thCancel(el.dataset.run);
+      if (kind === "resume") thReply(el.dataset.run, n);
+    });
+  });
+
+  thFitSplit();
+}
+
+function thStaticDetail(it) {
+  const det = $("th-detail"); if (!det) return;
+  const line = w => `<div class="th-mask-line" style="width:${w}%"></div>`;
+  det.innerHTML = `
+    <header class="th-head">
+      <div class="th-head-line"><span class="th-badge">快照</span></div>
+      <h3 class="th-head-title">${escHtml(it.title || "")}</h3>
+    </header>
+    <div class="th-detail-body">
+      <div class="th-static-tag">${escHtml(t("th_static_note"))}</div>
+      <section class="th-sec">${line(34)}${line(68)}${line(52)}</section>
+      <section class="th-sec">
+        <div class="th-sec-head"><span class="th-sec-title">${escHtml(t("th_timeline"))}</span></div>
+        ${line(44)}${line(60)}${line(38)}
+      </section>
+      <section class="th-sec">
+        <div class="th-sec-head"><span class="th-sec-title">${escHtml(t("th_issue_body"))}</span></div>
+        ${line(92)}${line(86)}${line(74)}${line(90)}${line(58)}
+      </section>
+    </div>`;
+}
+
+function thTaskCard(it, kind) {
+  const run = it.run || null;
+  const state = run ? thStateLabel(run.state) : (it.state === "closed" ? `已完成` : `待派发`);
+  const pct = thPercent(run);
+  const excerpt = it.excerpt ? `<div class="th-excerpt" title="${escAttr(it.excerpt)}">${escHtml(it.excerpt)}</div>` : "";
+  const selected = TH.taskView === it.number ? " selected" : "";
+  const dotState = run ? (run.state || "") : (it.state === "closed" ? "done" : "pending");
+
+  const metaParts = [
+    `<b>#${it.number}</b>`,
+    run ? escHtml(thHostName(run)) : "",
+    run && run.stage ? escHtml(run.stage) : "",
+  ].filter(Boolean).join('<i class="th-dot"></i>');
+
+  const progress = (kind === "running" || (run && TH_ACTIVE.has(run.state)))
+    ? `<div class="th-progress"><i style="width:${Math.max(12, pct)}%"></i></div>` : "";
+
+  let actions = "";
+  if (kind === "running" && run) {
+    actions = `<div class="th-row-actions"><button class="th-btn th-btn-sm th-btn-danger" type="button" data-th-act="cancel" data-run="${escAttr(run.id)}">停止</button></div>`;
+  } else if (kind === "pending") {
+    actions = `<div class="th-row-actions"><button class="th-btn th-btn-sm th-btn-primary" type="button" data-th-act="dispatch" data-num="${it.number}" data-title="${escAttr(it.title || "")}">派发</button></div>`;
+  }
+
+  return `<div class="th-card th-row${selected}" data-th-open="${it.number}" role="button" tabindex="0">
+    <div class="th-row-head">
+      <span class="th-state"><i class="th-led th-led-${escHtml(dotState)}"></i>${escHtml(state)}</span>
+      <span class="th-row-id">${metaParts}</span>
+      <span class="th-row-time">${escHtml(thAgo(it.updatedAt))}</span>
+    </div>
+    <div class="th-title" title="${escAttr(it.title || "")}">${escHtml(it.title || "")}</div>
+    ${excerpt}
+    ${progress}
+    ${actions}
+  </div>`;
+}
+
+/* ---------------- 任务详情：全生命周期流水线 + 实时控制台 + 交互式回复 ---------------- */
+async function thOpenTask(number, keepScroll) {
+  const box = $("th-tasks"), det = $("th-detail");
+  if (!box || !det) return;
+  TH.taskView = number;
+  if (TH.timer) { clearInterval(TH.timer); TH.timer = null; }
+  const wide = window.matchMedia("(min-width: 701px)").matches;
+  box.hidden = !wide;
+  det.hidden = false;
+  if (!wide && !keepScroll) det.scrollIntoView({ block: "start" });
+  document.querySelectorAll("#th-tasks .th-row").forEach(el => el.classList.toggle("selected", Number(el.dataset.thOpen) === number));
+  det.innerHTML = `<div class="th-skeleton"><i></i><i></i></div>`;
+
+  const d = await thGet(`/api/th/task?number=${encodeURIComponent(number)}`);
+  if (d.ok === false) { det.innerHTML = `<div class="gempty t-red">${escHtml(d.msg || `无法读取任务`)}</div>`; return; }
+
+  const issue = d.issue || {}, runs = d.runs || [], latest = d.latest || null, events = d.events || [];
+  const activeRun = latest && TH_ACTIVE.has(latest.state);
+  const isPending = !activeRun && issue.state !== "closed";
+  const isClosed = issue.state === "closed" || (latest && !activeRun);
+  const stateKey = latest ? (latest.state || "") : (issue.state === "closed" ? "succeeded" : "pending");
+  const stateText = latest ? thStateLabel(latest.state) : (issue.state === "closed" ? `已完成` : `待派发`);
+
+  // 阶段流水线（仅在运行中或有实际执行时计算展示）
+  const steps = [
+    { key: "dispatch", label: `1. 调度派发` },
+    { key: "analyze",  label: `2. 需求分析` },
+    { key: "develop",  label: `3. 代码编写` },
+    { key: "test",     label: `4. 验证测试` },
+    { key: "done",     label: `5. 交付完成` }
+  ];
+
+  let curStepIdx = 0;
+  if (latest) {
+    if (latest.state === "succeeded") {
+      curStepIdx = 4;
+    } else if (latest.state === "failed" || latest.state === "cancelled" || latest.state === "lost") {
+      curStepIdx = Math.max(1, TH_STAGE_ORDER.indexOf(latest.stage || ""));
+      if (curStepIdx > 3) curStepIdx = 3;
+    } else {
+      const stg = latest.stage || "";
+      if (stg === "analyze" || stg === "plan") curStepIdx = 1;
+      else if (stg === "implement" || stg === "commit") curStepIdx = 2;
+      else if (stg === "test" || stg === "pr") curStepIdx = 3;
+      else if (stg === "done") curStepIdx = 4;
+      else curStepIdx = 2;
+    }
+  }
+
+  const stepperHtml = activeRun ? `
+    <div class="th-stepper">
+      ${steps.map((s, idx) => {
+        const isDone = (latest && latest.state === "succeeded") || idx < curStepIdx;
+        const isCurrent = activeRun && idx === curStepIdx;
+        const cls = isDone ? "is-done" : (isCurrent ? "is-current" : "");
+        const iconTxt = isDone ? "✓" : String(idx + 1);
+        return `
+          <div class="th-step-item ${cls}">
+            <div class="th-step-dot">${iconTxt}</div>
+            <div class="th-step-label">${escHtml(s.label)}</div>
+          </div>`;
+      }).join("")}
+    </div>` : "";
+
+  // 状态横幅
+  let statusBannerHtml = "";
+  if (activeRun) {
+    const durationTxt = latest && latest.duration ? thFormatDuration(latest.duration) : "";
+    const runMsg = (latest && latest.message) ? latest.message : `智能体正在运行中…`;
+    const isWaiting = latest && latest.state === "waiting_user";
+    statusBannerHtml = `
+      <div class="th-status-banner${isWaiting ? ' is-warn' : ''}">
+        <div class="th-status-msg">
+          ${isWaiting ? `⚠️ <b>等待反馈</b>：` : '⚡ '}
+          <span>${escHtml(runMsg)}</span>
+        </div>
+        <div class="th-status-meta">
+          ${latest && latest.agent ? `<span class="chip th-chip" style="margin-right:6px;">${escHtml(latest.agent)}</span>` : ''}
+          ${durationTxt ? `<span>⏱ ${durationTxt}</span>` : ''}
+        </div>
+      </div>`;
+  }
+
+  // 内联人机交互区（针对 waiting_user 或 运行中随时干预）
+  let inlineReplyHtml = "";
+  if (activeRun) {
+    const isWaiting = latest && latest.state === "waiting_user";
+    const phTxt = isWaiting ? `请输入回复内容...` : `例如：检查 models.py 并重新测试...`;
+    inlineReplyHtml = `
+      <div class="th-inline-reply">
+        <div class="th-inline-reply-head">
+          <span>${isWaiting ? `💬 智能体等待你的回复：` : `💬 向运行中的智能体追加指令：`}</span>
+          <span style="font-size:10.5px;color:var(--text-ghost);">按回车直接发送</span>
+        </div>
+        <div class="th-inline-reply-box">
+          <input type="text" class="th-reply-input" id="th-inline-input" placeholder="${phTxt}" />
+          <button class="th-btn th-btn-primary" type="button" id="th-inline-send">发送</button>
+        </div>
+      </div>`;
+  }
+
+  // 待派发场景下的「内置快捷派发面板」
+  let quickDispatchHtml = "";
+  if (isPending) {
+    const hosts = ((TH.hosts && TH.hosts.hosts) || []).filter(h => h.online !== false);
+    const defHost = (TH.hosts && TH.hosts.default) || (hosts[0] || {}).id || "";
+    const repos = (TH.health && TH.health.repos) || ["iamcheyan/svc-dashboard", "iamcheyan/chezmoi", "iamcheyan/taskhub"];
+    quickDispatchHtml = `
+      <div class="th-quick-dispatch">
+        <div class="th-qd-head">
+          <span class="th-qd-title">🚀 准备派发该任务</span>
+          <span class="th-qd-hint">默认分派给 Hermes 并创建专属 Telegram 话题实时汇报</span>
+        </div>
+        <div class="th-qd-row">
+          <span class="th-qd-label">智能体</span>
+          <div class="th-qd-opts" id="th-qd-agents">
+            <button class="th-qd-opt is-on" type="button" data-qd-agent="hermes">⚡ hermes (推荐·全流程 & TG话题)</button>
+            <button class="th-qd-opt" type="button" data-qd-agent="pi">pi (敏捷修改)</button>
+            <button class="th-qd-opt" type="button" data-qd-agent="omp">omp (通用开发)</button>
+          </div>
+        </div>
+        <div class="th-qd-row">
+          <span class="th-qd-label">代码仓库</span>
+          <div class="th-qd-opts" id="th-qd-repos">
+            <button class="th-qd-opt is-on" type="button" data-qd-repo="">自动推断</button>
+            ${repos.map(r => `
+              <button class="th-qd-opt" type="button" data-qd-repo="${escAttr(r)}">
+                <span>${escHtml(r.split("/").pop())}</span>
+              </button>`).join("")}
+          </div>
+        </div>
+        <div class="th-qd-row">
+          <span class="th-qd-label">机器</span>
+          <div class="th-qd-opts" id="th-qd-hosts">
+            ${hosts.map((h, i) => `
+              <button class="th-qd-opt${h.id === defHost || (!defHost && i === 0) ? ' is-on' : ''}" type="button" data-qd-host="${escAttr(h.id)}">
+                <i class="th-opt-dot"></i> <span>${escHtml(h.label || h.id)}</span>
+              </button>`).join("") || `<span class="th-field-none">本地</span>`}
+          </div>
+        </div>
+        <div class="th-qd-foot">
+          <button class="th-btn th-btn-primary th-qd-launch" type="button" id="btn-qd-launch">⚡ 开始执行任务</button>
+        </div>
+      </div>`;
+  }
+
+  // 顶部操作动作组
+  const actions = [
+    activeRun
+      ? `<button class="th-btn th-btn-accent" type="button" data-th-act="wake" data-sess="${escAttr(latest ? latest.tmux_session : "")}">⚡ 唤醒推进</button>` : "",
+    activeRun
+      ? `<button class="th-btn th-btn-danger" type="button" data-th-act="cancel" data-run="${escAttr(latest ? latest.id : "")}" data-num="${issue.number}">停止</button>` : "",
+    isClosed
+      ? `<button class="th-btn th-btn-primary" type="button" data-th-act="dispatch" data-num="${issue.number}" data-title="${escAttr(issue.title || "")}">重新派发</button>` : "",
+    issue.state === "closed"
+      ? `<button class="th-btn" type="button" data-th-act="restore" data-num="${issue.number}">恢复打开</button>`
+      : `<button class="th-btn" type="button" data-th-act="close" data-num="${issue.number}">关闭任务</button>`,
+  ].filter(Boolean).join("");
+
+  const metaBits = [
+    (latest && latest.target_repo) || d.repo || "",
+    latest ? thHostName(latest) : "",
+    latest && latest.branch ? latest.branch : "",
+    latest && latest.notify_thread ? `TG话题 #${latest.notify_thread}` : ""
+  ].filter(Boolean).map(x => `<span>${escHtml(x)}</span>`).join('<i class="th-head-sep"></i>');
+
+  // 多 Tab 控制区（自适应默认值）
+  if (!TH.detailTab || isPending) {
+    TH.detailTab = isPending ? "issue" : "console";
+  }
+  const curDTab = TH.detailTab;
+
+  det.innerHTML = `
+    <div class="th-head">
+      <div class="th-head-line">
+        <button class="th-icon-btn th-back" type="button" data-th-back="1" aria-label="Back">←</button>
+        <span class="th-badge is-${escAttr(stateKey)}">${escHtml(stateText)}</span>
+        <span class="th-head-num">#${escHtml(String(issue.number || ""))}</span>
+        ${metaBits ? `<span class="th-head-meta"><i class="th-head-sep"></i>${metaBits}</span>` : ""}
+        <a class="th-icon-btn th-head-link" href="${escAttr(issue.url || "#")}" target="_blank" rel="noopener" title="GitHub" aria-label="GitHub">↗</a>
+      </div>
+      <h3 class="th-head-title">${escHtml(issue.title || "")}</h3>
+      <div class="th-head-actions">${actions}</div>
+    </div>
+    <div class="th-detail-body">
+      ${stepperHtml}
+      ${statusBannerHtml}
+      ${inlineReplyHtml}
+      ${quickDispatchHtml}
+
+      <div class="th-detail-tabs">
+        ${activeRun || (latest && latest.tmux_session) ? `
+          <button class="th-dtab-btn${curDTab === 'console' ? ' active' : ''}" type="button" data-dtab="console">💻 实时终端控制台</button>` : ''}
+        <button class="th-dtab-btn${curDTab === 'issue' ? ' active' : ''}" type="button" data-dtab="issue">📝 任务内容说明</button>
+        <button class="th-dtab-btn${curDTab === 'timeline' ? ' active' : ''}" type="button" data-dtab="timeline">📋 执行时间线 (${events.length})</button>
+        ${runs.length > 1 ? `<button class="th-dtab-btn${curDTab === 'runs' ? ' active' : ''}" type="button" data-dtab="runs">📜 历史执行 (${runs.length})</button>` : ''}
+      </div>
+
+      ${activeRun || (latest && latest.tmux_session) ? `
+      <div id="th-tab-console-pane" ${curDTab === 'console' ? '' : 'hidden'}>
+        <div class="th-term-window">
+          <div class="th-term-header">
+            <span id="th-term-title">会话：${escHtml(latest && latest.tmux_session ? latest.tmux_session : "none")}</span>
+            <div class="th-term-actions">
+              <button class="th-term-btn" type="button" id="btn-term-autoscroll" title="Auto Scroll">滚屏: 开</button>
+              <button class="th-term-btn" type="button" id="btn-term-ctrl-c" title="Ctrl+C">Ctrl+C</button>
+              <button class="th-term-btn" type="button" id="btn-term-enter" title="Enter">Enter ↵</button>
+              <button class="th-term-btn" type="button" id="btn-term-wake" title="Wake">⚡ 唤醒</button>
+              <button class="th-term-btn" type="button" id="btn-term-copy" title="Copy">复制</button>
+            </div>
+          </div>
+          <pre class="th-term-content" id="th-term-output">${escHtml(t("th_loading"))}</pre>
+        </div>
+      </div>` : ''}
+
+      <div id="th-tab-issue-pane" ${curDTab === 'issue' ? '' : 'hidden'}>
+        <div class="th-prose">${escHtml(issue.body || `（无正文）`)}</div>
+      </div>
+
+      <div id="th-tab-timeline-pane" ${curDTab === 'timeline' ? '' : 'hidden'}>
+        <ol class="th-timeline">
+          ${events.length ? events.map(e => `
+            <li class="th-ev th-ev-${escHtml(e.kind || "")}">
+              <span class="th-ev-time">${new Date((e.at || 0) * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+              <span class="th-ev-kind">${escHtml(e.kind || "")}</span>
+              <span class="th-ev-msg">${escHtml((e.message || "").slice(0, 300))}</span>
+            </li>`).join("") : `<li class="th-ev th-ev-empty">暂无事件记录</li>`}
+        </ol>
+      </div>
+
+      ${runs.length > 1 ? `
+      <div id="th-tab-runs-pane" ${curDTab === 'runs' ? '' : 'hidden'}>
+        <div class="th-runs">${runs.map(r => `
+          <div class="th-run-row" data-th-runlog="${escAttr(r.id)}" role="button" tabindex="0">
+            <span class="th-run-agent">${escHtml(r.agent)}</span>
+            <span class="th-run-state">${escHtml(thStateLabel(r.state))}</span>
+            <span class="th-run-stage">${escHtml(r.stage || "—")}</span>
+            <span class="th-run-time">${escHtml(thAgo(new Date((r.started_at || r.created_at) * 1000).toISOString()))}</span>
+            <span class="th-run-log-link">查看日志</span>
+          </div>`).join("")}</div>
+      </div>` : ''}
+
+      <div id="th-runlog" class="th-runlog" hidden></div>
+    </div>`;
+
+  // 待派发场景下，绑定内置快捷派发面板交互
+  if (isPending) {
+    let selAgent = "hermes";
+    let selRepo = "";
+    const hosts = ((TH.hosts && TH.hosts.hosts) || []).filter(h => h.online !== false);
+    let selHost = (TH.hosts && TH.hosts.default) || (hosts[0] || {}).id || "";
+
+    det.querySelectorAll("[data-qd-agent]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        selAgent = btn.dataset.qdAgent;
+        det.querySelectorAll("[data-qd-agent]").forEach(b => b.classList.toggle("is-on", b === btn));
+      });
+    });
+
+    det.querySelectorAll("[data-qd-repo]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        selRepo = btn.dataset.qdRepo || "";
+        det.querySelectorAll("[data-qd-repo]").forEach(b => b.classList.toggle("is-on", b === btn));
+      });
+    });
+
+    det.querySelectorAll("[data-qd-host]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        selHost = btn.dataset.qdHost;
+        det.querySelectorAll("[data-qd-host]").forEach(b => b.classList.toggle("is-on", b === btn));
+      });
+    });
+
+    const launchBtn = det.querySelector("#btn-qd-launch");
+    if (launchBtn) {
+      launchBtn.addEventListener("click", async () => {
+        launchBtn.disabled = true;
+        launchBtn.textContent = `正在调度…`;
+        try {
+          const r = await apiPost("/api/th/dispatch", { number: Number(issue.number), agent: selAgent, host: selHost, target_repo: selRepo });
+          const d = await r.json().catch(() => ({ ok: false, msg: "bad json" }));
+          TH.health = null;
+          if (!d.ok) {
+            uiNotice(d.msg || `派发失败`);
+            launchBtn.disabled = false;
+            launchBtn.textContent = `⚡ 开始执行任务`;
+            return;
+          }
+          uiNotice(`任务 #${issue.number} 已分派给 ${selAgent}`);
+          thOpenTask(issue.number);
+        } catch (e) {
+          uiNotice("Error: " + e.message);
+          launchBtn.disabled = false;
+          launchBtn.textContent = `⚡ 开始执行任务`;
+        }
+      });
+    }
+  }
+
+  // Tab 切换逻辑
+  det.querySelectorAll("[data-dtab]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const tab = btn.dataset.dtab;
+      TH.detailTab = tab;
+      det.querySelectorAll("[data-dtab]").forEach(b => b.classList.toggle("active", b === btn));
+      const pConsole = $("th-tab-console-pane");
+      const pTimeline = $("th-tab-timeline-pane");
+      const pIssue = $("th-tab-issue-pane");
+      const pRuns = $("th-tab-runs-pane");
+      if (pConsole) pConsole.hidden = (tab !== "console");
+      if (pTimeline) pTimeline.hidden = (tab !== "timeline");
+      if (pIssue) pIssue.hidden = (tab !== "issue");
+      if (pRuns) pRuns.hidden = (tab !== "runs");
+    });
+  });
+
+  // 返回按钮
+  det.querySelector("[data-th-back]")?.addEventListener("click", () => {
+    TH.taskView = null; det.hidden = true; thRenderTasks();
+  });
+
+  // 操作按钮
+  det.querySelectorAll("[data-th-act]").forEach(el => {
+    if (el.tagName === "A") return;
+    el.addEventListener("click", ev => {
+      ev.stopPropagation();
+      const n = Number(el.dataset.num || issue.number), kind = el.dataset.thAct;
+      if (kind === "dispatch") thDispatchModal(n, { title: el.dataset.title || "", after: () => thOpenTask(n) });
+      if (kind === "restore") thSetState(n, "open");
+      if (kind === "close") thSetState(n, "closed");
+      if (kind === "cancel" && el.dataset.run) thCancel(el.dataset.run, () => thOpenTask(n));
+      if (kind === "wake" && latest && latest.tmux_session) {
+        apiPost("/api/tmux/wake", { session: latest.tmux_session, pane: "" }).then(r => r.json()).then(res => {
+          uiNotice(res.ok ? `已触发唤醒推进` : (res.msg || `唤醒失败`));
+        });
+      }
+    });
+  });
+
+  // 内嵌回复回车与发送
+  const replyInput = $("th-inline-input");
+  const replySendBtn = $("th-inline-send");
+  if (replyInput && replySendBtn && latest) {
+    const doSend = async () => {
+      const val = replyInput.value.trim();
+      if (!val) return;
+      replySendBtn.disabled = true;
+      replySendBtn.textContent = "…";
+      const r = await apiPost("/api/th/resume", { id: latest.id, text: val });
+      const res = await r.json().catch(() => ({ ok: false }));
+      replySendBtn.disabled = false;
+      replySendBtn.textContent = `发送`;
+      if (!res.ok) {
+        uiNotice(res.msg || `发送失败`);
+      } else {
+        replyInput.value = "";
+        uiNotice(`指令已送达智能体`);
+        thOpenTask(number, true);
+      }
+    };
+    replySendBtn.addEventListener("click", doSend);
+    replyInput.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); doSend(); } });
+  }
+
+  // 历史运行点击
+  det.querySelectorAll("[data-th-runlog]").forEach(el => el.addEventListener("click", () => thShowLog(el.dataset.thRunlog)));
+
+  // 实时终端捕获与控制
+  let autoScroll = true;
+  const btnScroll = $("btn-term-autoscroll");
+  if (btnScroll) {
+    btnScroll.addEventListener("click", () => {
+      autoScroll = !autoScroll;
+      btnScroll.textContent = autoScroll ? `滚屏: 开` : `滚屏: 关`;
+      btnScroll.classList.toggle("is-active", autoScroll);
+    });
+  }
+
+  const btnCtrlC = $("btn-term-ctrl-c");
+  if (btnCtrlC && latest && latest.tmux_session) {
+    btnCtrlC.addEventListener("click", async () => {
+      const r = await apiPost("/api/tmux/send", { session: latest.tmux_session, key: "C-c" });
+      const res = await r.json().catch(() => ({ ok: false }));
+      uiNotice(res.ok ? `已发送 Ctrl+C` : `发送失败`);
+    });
+  }
+
+  const btnEnter = $("btn-term-enter");
+  if (btnEnter && latest && latest.tmux_session) {
+    btnEnter.addEventListener("click", async () => {
+      const r = await apiPost("/api/tmux/send", { session: latest.tmux_session, text: "", enter: true });
+      const res = await r.json().catch(() => ({ ok: false }));
+      uiNotice(res.ok ? `已发送 Enter` : `发送失败`);
+    });
+  }
+
+  const btnWake = $("btn-term-wake");
+  if (btnWake && latest && latest.tmux_session) {
+    btnWake.addEventListener("click", async () => {
+      const r = await apiPost("/api/tmux/wake", { session: latest.tmux_session, pane: "" });
+      const res = await r.json().catch(() => ({ ok: false }));
+      uiNotice(res.ok ? `已发送唤醒` : `唤醒失败`);
+    });
+  }
+
+  const btnCopy = $("btn-term-copy");
+  if (btnCopy) {
+    btnCopy.addEventListener("click", () => {
+      const pre = $("th-term-output");
+      if (pre && navigator.clipboard) {
+        navigator.clipboard.writeText(pre.textContent || "");
+        uiNotice(`已复制终端文本`);
+      }
+    });
+  }
+
+  const pullTerminal = async () => {
+    const pre = $("th-term-output");
+    if (!pre) { if (TH.timer) clearInterval(TH.timer); return; }
+
+    if (latest && latest.tmux_session) {
+      // 优先从 Tmux 窗格实时捕获
+      const cap = await thGet(`/api/tmux/capture?target=${encodeURIComponent(latest.tmux_session)}&ansi=1&lines=180`);
+      if (cap && cap.ok && cap.capture) {
+        pre.innerHTML = ansiToHtml(Array.isArray(cap.capture) ? cap.capture.join("\n") : String(cap.capture));
+        if (autoScroll) pre.scrollTop = pre.scrollHeight;
+        return;
+      }
+    }
+
+    // 备用：从 TaskHub Run 日志拉取
+    if (latest && latest.id) {
+      const r = await thGet(`/api/th/log?id=${encodeURIComponent(latest.id)}&lines=150`);
+      if (r && r.ok && r.log) {
+        pre.textContent = r.log;
+        if (autoScroll) pre.scrollTop = pre.scrollHeight;
+        return;
+      }
+    }
+
+    if (!latest) {
+      pre.textContent = `尚未派发智能体会话。`;
+    } else {
+      pre.textContent = `会话正在准备启动或等待捕获…`;
+    }
+  };
+
+  pullTerminal();
+  if (TH.timer) { clearInterval(TH.timer); TH.timer = null; }
+  if (activeRun) {
+    TH.timer = setInterval(() => {
+      const pre = $("th-term-output");
+      if (!pre || TH.busy) { if (!pre) { clearInterval(TH.timer); TH.timer = null; } return; }
+      TH.busy = true; pullTerminal().finally(() => { TH.busy = false; });
+    }, 3500);
+  }
+}
+
+function thShowLog(runId) {
+  const box = $("th-runlog"); if (!box) return;
+  if (!box.hidden && TH.logId === runId) { box.hidden = true; TH.logId = null; return; }
+  TH.logId = runId;
+  box.hidden = false;
+  box.innerHTML = `<div class="th-runlog-head"><span>原始输出 · ${escHtml(runId)}</span>
+    <span class="chip" data-th-logclose="1" role="button" tabindex="0">收起</span></div>
+    <pre class="th-log" id="th-log-pre">${escHtml(t("th_loading"))}</pre>`;
+  box.querySelector("[data-th-logclose]")?.addEventListener("click", () => { box.hidden = true; TH.logId = null; });
+  const pull = async () => {
+    if (TH.logId !== runId) return;
+    const d = await thGet(`/api/th/log?id=${encodeURIComponent(runId)}&lines=400`);
+    const pre = $("th-log-pre"); if (!pre) return;
+    pre.textContent = d.ok === false ? (d.msg || t("th_no_log")) : (d.log || t("th_no_log"));
+    pre.scrollTop = pre.scrollHeight;
+  };
+  pull();
+  if (TH.timer) clearInterval(TH.timer);
+  TH.timer = setInterval(() => {
+    if (TH.logId !== runId || !box || box.hidden) { clearInterval(TH.timer); TH.timer = null; return; }
+    if (TH.busy) return;
+    TH.busy = true; pull().finally(() => { TH.busy = false; });
+  }, 3000);
+}
+
+/* ---------------- 全新「下发新任务」控制台模态框 ---------------- */
+async function thNewTaskModal() {
+  if (!TH.health || !TH.hosts) await thEnsureBase().catch(() => {});
+  document.querySelectorAll(".th-new-modal").forEach(el => el.remove());
+
+  const rawAgents = (TH.health && TH.health.agents) || ["hermes", "pi", "omp"];
+  const agents = ["hermes", ...rawAgents.filter(a => a !== "hermes")];
+  const agentMeta = {
+    hermes: { name: "hermes", desc: `主力执行 & 创建专属 Telegram 话题汇报` },
+    pi: { name: "pi", desc: `敏捷代码修改 · 直接交付` },
+    omp: { name: "omp", desc: `通用研发智能体 · 会话交互` }
+  };
+  const repos = (TH.health && TH.health.repos) || ["iamcheyan/svc-dashboard", "iamcheyan/chezmoi", "iamcheyan/taskhub"];
+  const hosts = ((TH.hosts && TH.hosts.hosts) || []).filter(h => h.online !== false);
+
+  let curAgent = "hermes";
+  let curRepo = "";
+  let curHost = (TH.hosts && TH.hosts.default) || (hosts[0] || {}).id || "";
+
+  const modal = document.createElement("div");
+  modal.className = "ui-modal th-new-modal";
+  modal.innerHTML = `
+    <div class="th-dlg" role="dialog" aria-modal="true" aria-labelledby="th-new-title" tabindex="-1">
+      <div class="th-dlg-head">
+        <div class="th-dlg-head-main">
+          <span class="th-dlg-kicker">智能体任务调度</span>
+          <h3 class="th-dlg-title" id="th-new-title">下发新任务</h3>
+        </div>
+        <button class="th-dlg-x" type="button" data-close="1" aria-label="Close">✕</button>
+      </div>
+      <div class="th-dlg-body">
+        <div class="th-field">
+          <span class="th-field-label">任务标题</span>
+          <div class="th-tags-row">
+            <button class="th-tag-btn" type="button" data-tag="[Bug]">修复 Bug</button>
+            <button class="th-tag-btn" type="button" data-tag="[Feature]">新功能</button>
+            <button class="th-tag-btn" type="button" data-tag="[Refactor]">代码重构</button>
+            <button class="th-tag-btn" type="button" data-tag="[Test]">测试验证</button>
+          </div>
+          <input type="text" class="th-input-text" id="th-new-input-title" placeholder="${escAttr(t("nt_ph_title"))}" maxlength="160" autocomplete="off" />
+        </div>
+
+        <div class="th-field">
+          <span class="th-field-label">任务需求 / Prompt 描述</span>
+          <textarea class="th-textarea" id="th-new-input-body" placeholder="${escAttr(t("nt_ph_body"))}"></textarea>
+        </div>
+
+        <div class="th-field">
+          <span class="th-field-label">目标代码仓库</span>
+          <div class="th-opts">
+            <button class="th-opt is-on" type="button" data-sel-repo="">
+              <i class="th-opt-dot"></i><span>自动判断</span>
+            </button>
+            ${repos.map(r => `
+              <button class="th-opt" type="button" data-sel-repo="${escAttr(r)}">
+                <i class="th-opt-dot"></i><span>${escHtml(r.split("/").pop())}</span>
+              </button>`).join("")}
+          </div>
+        </div>
+
+        <div class="th-field">
+          <span class="th-field-label">执行智能体</span>
+          <div class="th-opts" style="display:flex;gap:8px;">
+            ${agents.map(a => {
+              const meta = agentMeta[a] || { name: a, desc: a };
+              return `
+                <div class="th-agent-card${a === curAgent ? ' is-on' : ''}" data-sel-agent="${escAttr(a)}">
+                  <div class="th-agent-card-title">
+                    <span>${escHtml(meta.name)}</span>
+                    <i class="th-opt-dot"></i>
+                  </div>
+                  <div class="th-agent-card-desc">${escHtml(meta.desc)}</div>
+                </div>`;
+            }).join("")}
+          </div>
+        </div>
+
+        <div class="th-field">
+          <span class="th-field-label">执行主机</span>
+          <div class="th-opts">
+            ${hosts.map(h => `
+              <button class="th-opt${h.id === curHost ? ' is-on' : ''}" type="button" data-sel-host="${escAttr(h.id)}">
+                <i class="th-opt-dot"></i><span>${escHtml(h.label || h.id)}</span>
+              </button>`).join("") || `<span class="th-field-none">本地</span>`}
+          </div>
+        </div>
+      </div>
+      <div class="th-dlg-foot">
+        <button class="th-btn" type="button" data-close="1">取消</button>
+        <button class="th-btn th-btn-primary" type="button" id="btn-th-new-submit">立即下发任务 ⚡</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(modal);
+  const dlg = modal.querySelector(".th-dlg");
+
+  const close = () => {
+    document.removeEventListener("keydown", onKey);
+    modal.remove();
+  };
+  const onKey = ev => { if (ev.key === "Escape") { ev.stopPropagation(); close(); } };
+  document.addEventListener("keydown", onKey);
+  modal.addEventListener("click", ev => { if (ev.target === modal) close(); });
+  modal.querySelectorAll("[data-close]").forEach(el => el.addEventListener("click", close));
+
+  // 快捷标签添加前缀
+  const titleInput = modal.querySelector("#th-new-input-title");
+  modal.querySelectorAll("[data-tag]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const tag = btn.dataset.tag;
+      if (!titleInput.value.startsWith(tag)) {
+        titleInput.value = `${tag} ${titleInput.value.replace(/^\[[^\]]+\]\s*/, "")}`;
+      }
+      titleInput.focus();
+    });
+  });
+
+  // 仓库选择
+  modal.querySelectorAll("[data-sel-repo]").forEach(opt => {
+    opt.addEventListener("click", () => {
+      curRepo = opt.dataset.selRepo || "";
+      modal.querySelectorAll("[data-sel-repo]").forEach(o => o.classList.toggle("is-on", o === opt));
+    });
+  });
+
+  // 智能体选择
+  modal.querySelectorAll("[data-sel-agent]").forEach(card => {
+    card.addEventListener("click", () => {
+      curAgent = card.dataset.selAgent;
+      modal.querySelectorAll("[data-sel-agent]").forEach(c => c.classList.toggle("is-on", c === card));
+    });
+  });
+
+  // 主机选择
+  modal.querySelectorAll("[data-sel-host]").forEach(opt => {
+    opt.addEventListener("click", () => {
+      curHost = opt.dataset.selHost;
+      modal.querySelectorAll("[data-sel-host]").forEach(o => o.classList.toggle("is-on", o === opt));
+    });
+  });
+
+  // 提交
+  const submitBtn = modal.querySelector("#btn-th-new-submit");
+  submitBtn.addEventListener("click", async () => {
+    const title = titleInput.value.trim();
+    const body = modal.querySelector("#th-new-input-body").value.trim();
+    if (!title) {
+      uiNotice(`请输入任务标题`);
+      titleInput.focus();
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = `正在调度下发…`;
+
+    try {
+      const r = await apiPost("/api/th/new", { title, body, agent: curAgent, host: curHost, target_repo: curRepo });
+      const res = await r.json().catch(() => ({ ok: false, msg: `网络错误` }));
+      if (!res.ok) {
+        uiNotice(res.msg || `下发任务失败`);
+        submitBtn.disabled = false;
+        submitBtn.textContent = `立即下发任务 ⚡`;
+        return;
+      }
+
+      close();
+      uiNotice(`任务 #${res.number || ""} 已分派给 ${curAgent}`);
+
+      // 切到任务 Tab 并刷新打开该任务
+      const vTasks = $("tmux-view-tasks");
+      const vSessions = $("tmux-view-sessions");
+      if (vTasks) { vTasks.hidden = false; vTasks.style.display = ""; }
+      if (vSessions) { vSessions.hidden = true; vSessions.style.display = "none"; }
+      $("tmux-subnav")?.querySelectorAll(".page-subnav-btn").forEach(b => {
+        b.classList.toggle("active", b.dataset.ttab === "tasks");
+      });
+
+      await thRenderTasks();
+      if (res.number) thOpenTask(Number(res.number));
+    } catch (e) {
+      uiNotice(`创建失败: ` + e.message);
+      submitBtn.disabled = false;
+      submitBtn.textContent = `立即下发任务 ⚡`;
+    }
+  });
+
+  setTimeout(() => titleInput.focus(), 50);
+}
+
+/* 派遣弹窗：执行者 / 机器 → 确认。挂在 body 上，手机为底部滑层。 */
+async function thDispatchModal(number, opts = {}) {
+  const after = typeof opts === "function" ? opts : (opts.after || null);
+  const title = (opts && opts.title) || "";
+  if (!TH.health || !TH.hosts) await thEnsureBase().catch(() => {});
+  document.querySelectorAll(".th-dispatch-modal").forEach(el => el.remove());
+  const rawAgents = (TH.health && TH.health.agents) || ["hermes", "pi", "omp"];
+  const agents = ["hermes", ...rawAgents.filter(a => a !== "hermes")];
+  const labels = (TH.health && TH.health.agent_labels) || {};
+  const repos = (TH.health && TH.health.repos) || ["iamcheyan/svc-dashboard", "iamcheyan/chezmoi", "iamcheyan/taskhub"];
+  const hosts = ((TH.hosts && TH.hosts.hosts) || []).filter(h => h.online !== false);
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(TH_DISPATCH_KEY) || "{}") || {}; } catch (e) { saved = {}; }
+  const defAgent = "hermes";
+  const defHost = hosts.some(h => h.id === saved.host) ? saved.host
+    : ((TH.hosts && TH.hosts.default) || (hosts[0] || {}).id || "");
+  let agent = defAgent, hostId = defHost, targetRepo = "";
+  const optBtn = (field, val, text, on) => `
+    <button class="th-opt${on ? " is-on" : ""}" type="button" data-th-field="${field}"
+      data-val="${escAttr(val)}" aria-pressed="${on ? "true" : "false"}">
+      <i class="th-opt-dot"></i><span>${escHtml(text)}</span></button>`;
+  const modal = document.createElement("div");
+  modal.className = "ui-modal th-dispatch-modal";
+  modal.innerHTML = `
+    <div class="th-dlg" role="dialog" aria-modal="true" aria-labelledby="th-dlg-title" tabindex="-1">
+      <div class="th-dlg-head">
+        <div class="th-dlg-head-main">
+          <span class="th-dlg-kicker">${escHtml(t("th_dispatch"))}</span>
+          <h3 class="th-dlg-title" id="th-dlg-title"><span class="th-dlg-num">#${escHtml(String(number))}</span><span>${escHtml(title)}</span></h3>
+        </div>
+        <button class="th-dlg-x" type="button" data-th-dlg-close="1" aria-label="${escAttr(t("m_close"))}">✕</button>
+      </div>
+      <div class="th-dlg-body">
+        <div class="th-field">
+          <span class="th-field-label">${escHtml(t("th_agent"))}</span>
+          <div class="th-opts">${agents.map(a => optBtn("agent", a, labels[a] || a, a === defAgent)).join("") || `<span class="th-field-none">—</span>`}</div>
+        </div>
+        <div class="th-field">
+          <span class="th-field-label">代码仓库</span>
+          <div class="th-opts">
+            ${optBtn("repo", "", `自动推断`, true)}
+            ${repos.map(r => optBtn("repo", r, r.split("/").pop(), false)).join("")}
+          </div>
+        </div>
+        <div class="th-field">
+          <span class="th-field-label">${escHtml(t("th_host"))}</span>
+          <div class="th-opts">${hosts.map(h => optBtn("host", h.id, h.label || h.id, h.id === defHost)).join("") || `<span class="th-field-none">—</span>`}</div>
+        </div>
+      </div>
+      <div class="th-dlg-foot">
+        <button class="th-btn" type="button" data-th-dlg-close="1">${escHtml(t("m_cancel"))}</button>
+        <button class="th-btn th-btn-primary" type="button" data-th-dlg-go="1">${escHtml(t("th_dispatch"))}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  const dlg = modal.querySelector(".th-dlg");
+  const onKey = ev => { if (ev.key === "Escape") { ev.stopPropagation(); close(); } };
+  const close = () => { document.removeEventListener("keydown", onKey); modal.remove(); };
+  document.addEventListener("keydown", onKey);
+  modal.addEventListener("click", ev => { if (ev.target === modal) close(); });
+  modal.querySelectorAll("[data-th-dlg-close]").forEach(el => el.addEventListener("click", close));
+  modal.querySelectorAll(".th-opt").forEach(el => el.addEventListener("click", () => {
+    const field = el.dataset.thField;
+    if (field === "agent") agent = el.dataset.val;
+    else if (field === "repo") targetRepo = el.dataset.val;
+    else hostId = el.dataset.val;
+    modal.querySelectorAll(`.th-opt[data-th-field="${field}"]`).forEach(x => {
+      const on = x === el;
+      x.classList.toggle("is-on", on);
+      x.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }));
+  const go = modal.querySelector("[data-th-dlg-go]");
+  go.addEventListener("click", async () => {
+    if (go.disabled) return;
+    const label = go.textContent;
+    go.disabled = true;
+    go.textContent = "…";
+    try {
+      const r = await apiPost("/api/th/dispatch", { number: Number(number), agent, host: hostId, target_repo: targetRepo });
+      const d = await r.json().catch(() => ({ ok: false, msg: "bad json" }));
+      TH.health = null;
+      if (!d.ok) { uiNotice(d.msg || `派发失败`); go.disabled = false; go.textContent = label; return; }
+      try { localStorage.setItem(TH_DISPATCH_KEY, JSON.stringify({ agent, host: hostId })); } catch (e) {}
+      close();
+      if (d.needs_repo) uiNotice(`已发到 Telegram，等你确认代码仓库`);
+      if (after) after(); else thRenderTasks();
+    } catch (err) {
+      uiNotice("Error: " + err.message);
+      go.disabled = false;
+      go.textContent = label;
+    }
+  });
+  setTimeout(() => dlg.focus({ preventScroll: true }), 30);
+  return modal;
+}
+
+async function thSetState(number, state) {
+  const r = await apiPost("/api/th/state", { number: Number(number), state });
+  const d = await r.json().catch(() => ({ ok: false, msg: "bad json" }));
+  if (!d.ok) { uiNotice(d.msg || `操作失败`); return; }
+  TH.taskView ? thOpenTask(TH.taskView) : thRenderTasks();
+}
+
+async function thCancel(runId, after) {
+  const r = await apiPost("/api/th/cancel", { id: runId });
+  const d = await r.json().catch(() => ({ ok: false }));
+  if (!d.ok) { uiNotice(d.msg || `取消失败`); return; }
+  after ? after() : (TH.taskView ? thOpenTask(TH.taskView) : thRenderTasks());
+}
+
+async function thReply(runId, number) {
+  const text = window.prompt(`给 agent 的指令`);
+  if (!text) return;
+  const r = await apiPost("/api/th/resume", { id: runId, text });
+  const d = await r.json().catch(() => ({ ok: false }));
+  if (!d.ok) { alert(d.msg || `发送失败`); return; }
+  TH.taskView ? thOpenTask(number) : thRenderTasks();
+}
+
+// 服务页：服务 / 定时 / 日志 三个小 tab（与活动页同一套 subnav）
+function initSvcSubnav() {
+  const bar = $("svc-subnav");
+  if (!bar || bar.dataset.wired) return;
+  bar.dataset.wired = "1";
+  const panes = { svc: ["svc-panel", "filters"], cron: ["cron-panel"] };
+  const all = new Set(Object.values(panes).flat());
+  bar.addEventListener("click", e => {
+    const btn = e.target.closest(".page-subnav-btn");
+    if (!btn || !btn.dataset.sv) return;
+    const want = btn.dataset.sv;
+    bar.querySelectorAll(".page-subnav-btn").forEach(b => b.classList.toggle("active", b === btn));
+    all.forEach(id => {
+      const el = $(id);
+      if (!el) return;
+      const show = (panes[want] || []).includes(id);
+      el.hidden = !show;
+      el.style.display = show ? "" : "none";
+    });
+    if (want === "cron" && typeof cronLoad === "function") cronLoad();
+  });
+}
+document.addEventListener("DOMContentLoaded", initSvcSubnav);
+setTimeout(initSvcSubnav, 800);

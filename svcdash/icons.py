@@ -81,6 +81,7 @@ ICONS = {
     "message":  '<path d="M2.6 3.2h10.8v8.4H7.4L4.4 14.2v-2.6H2.6Z"/><path d="M5.4 6h5.2M5.4 8.2h3.2"/>',
     "share":    '<circle cx="4" cy="8" r="1.8"/><circle cx="12" cy="3.8" r="1.8"/><circle cx="12" cy="12.2" r="1.8"/><path d="m5.6 7.1 4.8-2.5M5.6 8.9l4.8 2.5"/>',
     "terminal": '<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="m4.8 6.6 2.4 1.9-2.4 1.9M8.8 10.4h3"/>',
+    "server":   '<rect x="2" y="3" width="12" height="4" rx="1.2"/><rect x="2" y="9" width="12" height="4" rx="1.2"/><path d="M4 5h.01M4 11h.01"/>',
     "tool":     '<circle cx="8" cy="8" r="2.4"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M12.4 3.6 11 5M5 11l-1.4 1.4"/>',
 }
 _ICO_PAT = re.compile(r"\{\{ICO:([a-z0-9_]+)(?::(\d+))?\}\}")

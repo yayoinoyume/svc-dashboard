@@ -141,6 +141,26 @@ def _collect_static_snapshot(lang=DEFAULT_LANG):
         clean_magpie_routing = {lg: {} for lg in LANG_KEYS}
         clean_magpie_providers = {lg: {} for lg in LANG_KEYS}
 
+    # PVE 虚拟机数据与详情收集 (Windows11 / DEBIAN 等)
+    clean_vms = {}
+    clean_vms_detail = {}
+    try:
+        from svcdash.pve import (
+            get_pve_vms, sanitize_pve_vms_for_public,
+            get_pve_vm_detail, sanitize_pve_vm_detail_for_public
+        )
+        raw_vms = get_pve_vms(force=True)
+        clean_vms = {lg: sanitize_pve_vms_for_public(raw_vms, lg) for lg in LANG_KEYS}
+        for v in (raw_vms.get("vms") or []):
+            vid = str(v.get("vmid"))
+            dt = get_pve_vm_detail(vid, force=True)
+            for lg in LANG_KEYS:
+                clean_vms_detail.setdefault(lg, {})[vid] = sanitize_pve_vm_detail_for_public(dt, lg)
+    except Exception as e:
+        print(f"[!] 采集 PVE 虚拟机数据异常: {e}")
+        clean_vms = {lg: {"ok": False, "vms": []} for lg in LANG_KEYS}
+        clean_vms_detail = {lg: {} for lg in LANG_KEYS}
+
     return {
         "now": now, "clean_services": clean_services, "sysdata": sysdata,
         "chart_data": chart_data, "goals_data": goals_data,
@@ -149,7 +169,46 @@ def _collect_static_snapshot(lang=DEFAULT_LANG):
         "clean_tl": clean_tl, "clean_magpie_usage": clean_magpie_usage,
         "clean_magpie_routing": clean_magpie_routing,
         "clean_magpie_providers": clean_magpie_providers,
+        "clean_vms": clean_vms,
+        "clean_vms_detail": clean_vms_detail,
     }
+
+
+def _collect_public_tasks():
+    """静态快照里的任务列表：只保留 issue 标题与摘要。
+
+    正文、分支、机器、执行日志、编号都不采集——公开页面上出现的就是全部内容，
+    不做"发布后模糊"（CSS blur 在开发者工具里一键就能去掉，不能当隐私边界）。
+    带 private / secret / no-publish 标签的 issue 直接跳过。
+    """
+    try:
+        from . import taskhub as th_mod
+        d = th_mod.issues(mode="open")
+        if d.get("ok") is False:
+            return {"items": [], "error": d.get("msg") or "taskhub unavailable"}
+        items = []
+        for it in (d.get("issues") or []):
+            labels = [str(l).lower() for l in (it.get("labels") or [])]
+            if any(l in {"private", "secret", "no-publish"} for l in labels):
+                continue
+            title = (it.get("title") or "").strip()
+            if not title:
+                continue
+            items.append({"title": title, "excerpt": (it.get("excerpt") or "").strip()})
+        return {"items": items[:40], "count": len(items)}
+    except Exception as exc:
+        return {"items": [], "error": str(exc)[:120]}
+
+
+def _public_tasks_payload(lang=DEFAULT_LANG):
+    data = _collect_public_tasks()
+    items = []
+    for it in data.get("items") or []:
+        items.append({
+            "title": sanitize_text(str(it.get("title") or ""))[:160],
+            "excerpt": sanitize_text(str(it.get("excerpt") or ""))[:220],
+        })
+    return {"items": items, "count": len(items), "error": data.get("error") or ""}
 
 
 def gather_static_payload(lang=DEFAULT_LANG, snapshot=None):
@@ -220,6 +279,10 @@ def gather_static_payload(lang=DEFAULT_LANG, snapshot=None):
         "goalsData": public_goals,
         "reposData": deep_sanitize(repos_data, mask_ips=True, mask_paths=True),
         "tasksData": sanitize_public_payload(tasks_data, lang),
+        # 任务标题/摘要按字段单独脱敏：只清洗密钥、家目录、内网 IP，
+        # 不套用通用 red("content")——那会把标题整条替换成"[内容已脱敏]"，
+        # 列表就没法看了。正文/分支/日志在采集阶段就没有进入快照。
+        "thTasks": _public_tasks_payload(lang),
         "tmuxData": sanitize_public_payload(clean_tmux, lang),
         # clean_runtimes 已由 sanitize_runtimes_for_public 处理；不要再次套用
         # 通用内容规则，否则 quota.bucket.label 会被误判为私密文本。
@@ -228,6 +291,8 @@ def gather_static_payload(lang=DEFAULT_LANG, snapshot=None):
         "magpieUsage": (snapshot.get("clean_magpie_usage") or {}).get(lang, {}),
         "magpieRouting": (snapshot.get("clean_magpie_routing") or {}).get(lang, {}),
         "magpieProviders": (snapshot.get("clean_magpie_providers") or {}).get(lang, {}),
+        "vmsData": (snapshot.get("clean_vms") or {}).get(lang, {}),
+        "vmsDetail": (snapshot.get("clean_vms_detail") or {}).get(lang, {}),
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
     }
 
@@ -256,10 +321,23 @@ def export_static(output_dir, lang=DEFAULT_LANG, cname=None):
     os.makedirs(out_static, exist_ok=True)
 
     # 复制静态资源 (app.css, app.js, icons/)
+    # 需求 #138：app.js/app.css 是原样拷到公开站的，而 app.js 里可能硬编码
+    # 内网 IP / Tailscale IP / 真实邮箱。只清洗 HTML 是不够的，这里对拷过去的
+    # 文本资源也做一次脱敏，避免源码里的私有信息随 GitHub Pages 发布。
     for fn in ("app.css", "app.js"):
         src = os.path.join(STATIC_DIR, fn)
-        if os.path.isfile(src):
-            shutil.copy2(src, os.path.join(out_static, fn))
+        if not os.path.isfile(src):
+            continue
+        dst = os.path.join(out_static, fn)
+        shutil.copy2(src, dst)
+        try:
+            text = open(dst, "r", encoding="utf-8").read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        masked = sanitize_text(mask_secret(text), mask_ips=True, mask_paths=True)
+        if masked != text:
+            with open(dst, "w", encoding="utf-8") as fp:
+                fp.write(masked)
     icons_src = os.path.join(STATIC_DIR, "icons")
     if os.path.isdir(icons_src):
         shutil.copytree(icons_src, os.path.join(out_static, "icons"), dirs_exist_ok=True)

@@ -6,7 +6,7 @@ from html import escape
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
-from svcdash import procscan, sysinfo, tasks, manage, agents, goals, repos, tools, render, svcctl, runtimes
+from svcdash import procscan, sysinfo, tasks, manage, agents, goals, repos, tools, render, svcctl, runtimes, taskhub
 from svcdash.i18n import t, detect_lang, DEFAULT_LANG
 from svcdash.config import SERVER_VER
 
@@ -265,6 +265,39 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query)
             refresh = (qs.get("refresh") or ["0"])[0] in ("1", "true")
             self._send_json(200, repos.repo_stats(refresh=refresh))
+        elif path == "/api/th/health":
+            self._send_json(200, taskhub.health())
+        elif path == "/api/th/hosts":
+            self._send_json(200, taskhub.hosts())
+        elif path == "/api/th/issues":
+            qs = parse_qs(urlparse(self.path).query)
+            mode = (qs.get("mode") or ["open"])[0]
+            q = (qs.get("q") or [""])[0]
+            self._send_json(200, taskhub.issues(mode=mode, q=q))
+        elif path == "/api/th/task":
+            try:
+                num = int((parse_qs(urlparse(self.path).query).get("number") or [""])[0])
+            except ValueError:
+                num = 0
+            self._send_json(200, taskhub.task(num) if num else {"ok": False, "msg": "missing number"})
+        elif path == "/api/th/runs":
+            qs = parse_qs(urlparse(self.path).query)
+            try:
+                lim = max(1, min(200, int((qs.get("limit") or ["40"])[0])))
+            except ValueError:
+                lim = 40
+            self._send_json(200, taskhub.runs(limit=lim))
+        elif path == "/api/th/run":
+            rid = (parse_qs(urlparse(self.path).query).get("id") or [""])[0]
+            self._send_json(200, taskhub.run_detail(rid) if rid else {"ok": False, "msg": "missing id"})
+        elif path == "/api/th/log":
+            qs = parse_qs(urlparse(self.path).query)
+            rid = (qs.get("id") or [""])[0]
+            try:
+                lines = max(20, min(2000, int((qs.get("lines") or ["300"])[0])))
+            except ValueError:
+                lines = 300
+            self._send_json(200, taskhub.run_log(rid, lines) if rid else {"ok": False, "msg": "missing id"})
         elif path == "/api/tasks":
             lang = detect_lang(self.headers.get("Accept-Language", ""), urlparse(self.path).query)
             self._send_json(200, {"tasks": tasks.scan_tasks(lang)})
@@ -361,6 +394,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/magpie/providers":
             from . import magpie
             self._send_json(200, magpie.get_magpie_providers())
+        elif path == "/api/vms":
+            from . import pve
+            self._send_json(200, pve.get_pve_vms())
+        elif path == "/api/vms/detail":
+            from . import pve
+            qs = parse_qs(urlparse(self.path).query)
+            vmid = (qs.get("vmid") or ["103"])[0]
+            self._send_json(200, pve.get_pve_vm_detail(vmid))
         else:
             self.send_error(404)
 
@@ -402,7 +443,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path not in ("/api/manage", "/api/cleanup", "/api/aicleanup", "/api/uservice", "/api/svcctl", "/api/runtimes", "/api/models", "/api/goalresume", "/api/tmux/wake", "/api/tmux/new", "/api/tmux/kill", "/api/tmux/send", "/api/tailscale/ping", "/api/tailscale/netcheck", "/api/tasks/run"):
+        if path not in ("/api/manage", "/api/cleanup", "/api/aicleanup", "/api/uservice", "/api/svcctl", "/api/runtimes", "/api/models", "/api/goalresume", "/api/tmux/wake", "/api/tmux/new", "/api/tmux/kill", "/api/tmux/send", "/api/tailscale/ping", "/api/tailscale/netcheck", "/api/tasks/run",
+                "/api/th/dispatch", "/api/th/state", "/api/th/cancel", "/api/th/resume", "/api/th/new"):
             self.send_error(404)
             return
         # 先消费请求体再鉴权: 403(跨站/无token)提前返回时若 body 残留在
@@ -437,6 +479,43 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(400, {"ok": False, "msg": t(lang, "m_badreq", e=str(e))})
             return
         lang = detect_lang(self.headers.get("Accept-Language", ""), urlparse(self.path).query)
+        if path == "/api/th/new":
+            title = str(body.get("title") or "").strip()
+            if not title:
+                self._send_json(400, {"ok": False, "msg": "missing title"})
+                return
+            res = taskhub.create(title, str(body.get("body") or ""),
+                                 str(body.get("agent") or "pi"), str(body.get("host") or ""))
+            self.log_message("th_new issue=%s agent=%s host=%s", res.get("number"), body.get("agent"), body.get("host"))
+            self._send_json(200 if res.get("ok") else 400, res)
+            return
+        if path == "/api/th/dispatch":
+            num = body.get("number")
+            if not num:
+                self._send_json(400, {"ok": False, "msg": "missing number"})
+                return
+            res = taskhub.dispatch(num, agent=(body.get("agent") or None), host=(body.get("host") or None))
+            self.log_message("th_dispatch issue=%s agent=%s host=%s", num, body.get("agent"), body.get("host"))
+            self._send_json(200 if res.get("ok") else 400, res)
+            return
+        if path == "/api/th/state":
+            num, state = body.get("number"), body.get("state")
+            if not num or state not in ("open", "closed"):
+                self._send_json(400, {"ok": False, "msg": "bad state"})
+                return
+            res = taskhub.set_state(num, state)
+            self._send_json(200 if res.get("ok") else 400, res)
+            return
+        if path == "/api/th/cancel":
+            rid = str(body.get("id") or "")
+            res = taskhub.cancel(rid) if rid else {"ok": False, "msg": "missing id"}
+            self._send_json(200 if res.get("ok") else 400, res)
+            return
+        if path == "/api/th/resume":
+            rid, text = str(body.get("id") or ""), str(body.get("text") or "")
+            res = taskhub.resume(rid, text) if rid and text else {"ok": False, "msg": "missing id/text"}
+            self._send_json(200 if res.get("ok") else 400, res)
+            return
         if path == "/api/manage":
             unit = str(body.get("unit") or "")
             action = str(body.get("action") or "")

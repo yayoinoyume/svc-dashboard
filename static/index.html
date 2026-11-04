@@ -57,6 +57,7 @@ try{var _tm=localStorage.getItem("svc-theme");if(_tm==="dark"||_tm==="light")doc
   <canvas id="chart" height="140"></canvas>
   <div id="chart-empty">{{T:chart_empty}}</div>
 </div>
+<div class="hp-vms-grid" id="hp-vms-grid"></div>
 <div class="hp-portal-grid" id="hp-portal-grid">
   <!-- 1. 近期动态概览 -->
   <div class="gpanel hp-portal-card" id="hp-card-activity">
@@ -129,8 +130,11 @@ try{var _tm=localStorage.getItem("svc-theme");if(_tm==="dark"||_tm==="light")doc
 {{TOOLCHIPS}}
 {{GOALS_PANEL}}
 <div class="gpanel" id="activity-page" hidden>
-  <div class="act-header">
-    <h2>{{T:act_title}} <span class="ghint">{{T:act_hint}}</span></h2>
+  <div class="page-head">
+    <div class="page-head-main">
+      <h2>{{T:act_title}}</h2>
+      <span class="page-hint">{{T:act_hint}}</span>
+    </div>
   </div>
   <div class="filters act-filters" id="act-filters">
     <span class="chip active" data-af="all" role="button" tabindex="0">{{T:act_all}} <span id="n-act-all"></span></span>
@@ -143,6 +147,16 @@ try{var _tm=localStorage.getItem("svc-theme");if(_tm==="dark"||_tm==="light")doc
     <span class="chip act-auto-publish-toggle" id="act-auto-publish-toggle" role="button" tabindex="0">{{T:act_show_auto}}</span>
   </div>
   <div id="activity-body"><div class="gempty">{{T:a_loading}}</div></div>
+</div>
+<div class="page-head" id="svc-head">
+  <div class="page-head-main">
+    <h2>{{T:tab_svc}}</h2>
+    <span class="page-hint">{{T:svc_page_hint}}</span>
+  </div>
+</div>
+<div class="page-subnav" id="svc-subnav">
+  <button class="page-subnav-btn active" data-sv="svc" type="button">{{ICO:file:13}} <span>{{T:tab_svc}}</span></button>
+  <button class="page-subnav-btn" data-sv="cron" type="button">{{ICO:retry:13}} <span>{{T:tl_cron_title}}</span></button>
 </div>
 <div class="filters" id="filters">
   <span class="chip" data-f="user" role="button" tabindex="0">{{T:chip_user}} <span id="n-user"></span></span>
@@ -158,9 +172,12 @@ try{var _tm=localStorage.getItem("svc-theme");if(_tm==="dark"||_tm==="light")doc
   <span class="chip" data-f="manage" role="button" tabindex="0">{{T:chip_manage}} <span id="n-manage"></span></span>
 </div>
 <div class="gpanel" id="network-page" hidden>
-  <div class="ts-header">
-    <h2>{{T:ts_title}} <span class="ghint">{{T:ts_hint}}</span></h2>
-    <div class="ts-header-actions">
+  <div class="page-head ts-header">
+    <div class="page-head-main">
+      <h2>{{T:ts_title}}</h2>
+      <span class="page-hint">{{T:ts_hint}}</span>
+    </div>
+    <div class="page-head-actions ts-header-actions">
       <button class="btn-ts-action" id="btn-ts-netcheck" title="{{T:ts_netcheck}}">
         {{ICO:activity:13}} <span>{{T:ts_netcheck}}</span>
       </button>
@@ -201,9 +218,12 @@ try{var _tm=localStorage.getItem("svc-theme");if(_tm==="dark"||_tm==="light")doc
   </table>
 </div>
 <div class="gpanel" id="agents-page" hidden>
-  <div class="agent-header">
-    <h2>{{T:agent_hub_title}} <span class="ghint">{{T:agent_hub_hint}}</span></h2>
-    <div class="agent-header-actions">
+  <div class="page-head agent-header">
+    <div class="page-head-main">
+      <h2>{{T:agent_hub_title}}</h2>
+      <span class="page-hint">{{T:agent_hub_hint}}</span>
+    </div>
+    <div class="page-head-actions agent-header-actions">
       <a class="btn-agent-top btn-magpie-portal" id="btn-agent-magpie" href="#" target="_blank" rel="noopener" title="{{T:mp_open_console}}" hidden>
         {{ICO:ext:13}} <span>Magpie ↗</span>
       </a>
@@ -387,67 +407,69 @@ try{var _tm=localStorage.getItem("svc-theme");if(_tm==="dark"||_tm==="light")doc
     <div class="gempty">{{T:st_loading}}</div>
   </div>
 </div>
-<!-- 新建智能体终端弹层 (New Agent Session Dialog) -->
+<!-- PVE 虚拟机详情全屏滑层 / 面板 -->
+<div class="vm-sheet" id="vm-detail-sheet" hidden>
+  <div class="vm-sheet-top">
+    <span class="traj-iconbtn" id="vm-sheet-back" role="button" tabindex="0" aria-label="{{T:vmd_back}}">{{ICO:back:20}}</span>
+    <div class="vm-sheet-title-wrap">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <span class="hp-vm-ico" id="vm-sheet-ico">{{ICO:server:16}}</span>
+        <h2 class="vm-sheet-title" id="vm-sheet-title">VM</h2>
+        <span class="hp-vm-status-badge" id="vm-sheet-badge"></span>
+      </div>
+      <span class="vm-sheet-sub" id="vm-sheet-sub"></span>
+    </div>
+    <div class="vm-sheet-top-actions">
+      <a class="btn-open-pve" id="vm-sheet-pve-link" href="#" target="_blank" rel="noopener">
+        <span>{{T:vmd_open_pve}}</span> {{ICO:ext:12}}
+      </a>
+    </div>
+  </div>
+  <div class="vm-sheet-nav" id="vm-sheet-nav">
+    <span class="chip active" data-vmtab="summary" role="button" tabindex="0">{{T:vmd_tab_summary}}</span>
+    <span class="chip" data-vmtab="hardware" role="button" tabindex="0">{{T:vmd_tab_hardware}}</span>
+    <span class="chip" data-vmtab="options" role="button" tabindex="0">{{T:vmd_tab_options}}</span>
+    <span class="chip" data-vmtab="tasks" role="button" tabindex="0">{{T:vmd_tab_tasks}}</span>
+  </div>
+  <div class="vm-sheet-body" id="vm-sheet-body">
+    <div class="gempty">{{T:st_loading}}</div>
+  </div>
+</div>
+<!-- 新建任务弹层 (New Task Dialog)：左边执行者，右边 Issue 正文 -->
 <div class="ui-modal" id="tmux-new-modal" hidden role="presentation">
-  <div class="ui-dialog tmux-new-dialog" role="dialog" aria-modal="true">
+  <div class="ui-dialog tmux-new-dialog nt-dialog" role="dialog" aria-modal="true">
     <div class="tmux-new-header">
-      <div class="tmux-new-title">{{ICO:term:18}} <span>{{T:tmux_new_modal_title}}</span></div>
+      <div class="tmux-new-title">{{ICO:term:18}} <span>{{T:nt_title}}</span></div>
       <button class="btn-tmux-close" id="btn-tmux-new-close" type="button" aria-label="{{T:m_close}}">✕</button>
     </div>
-    <div class="tmux-new-body">
-      <div class="tmux-form-group">
-        <label class="tmux-form-label">{{T:tmux_new_agent_label}}</label>
-        <div class="tmux-agent-grid" id="tmux-new-agent-grid">
-          <div class="tmux-agent-card active" data-agent="agy" style="--agent-accent:#a855f7;">
-            <div class="tmux-agent-icon">{{ICO:spark:18}}</div>
-            <div class="tmux-agent-name">agy</div>
-            <div class="tmux-agent-desc">Gemini / Antigravity</div>
+    <div class="nt-body">
+      <aside class="nt-side">
+        <div class="nt-side-label">{{T:nt_agent}}</div>
+        <div class="nt-agents" id="tmux-new-agent-grid">
+          <div class="nt-agent active" data-agent="omp" role="button" tabindex="0">
+            <span class="nt-agent-name">omp</span>
+            <span class="nt-agent-desc">{{T:nt_agent_omp}}</span>
           </div>
-          <div class="tmux-agent-card" data-agent="codex" style="--agent-accent:#10b981;">
-            <div class="tmux-agent-icon">{{ICO:term:18}}</div>
-            <div class="tmux-agent-name">codex</div>
-            <div class="tmux-agent-desc">OpenAI Codex CLI</div>
-          </div>
-          <div class="tmux-agent-card" data-agent="omp" style="--agent-accent:#06b6d4;">
-            <div class="tmux-agent-icon">{{ICO:activity:18}}</div>
-            <div class="tmux-agent-name">omp</div>
-            <div class="tmux-agent-desc">Oh My Prompt</div>
-          </div>
-          <div class="tmux-agent-card" data-agent="opencode" style="--agent-accent:#3b82f6;">
-            <div class="tmux-agent-icon">{{ICO:cpu:18}}</div>
-            <div class="tmux-agent-name">opencode</div>
-            <div class="tmux-agent-desc">OpenCode AI</div>
-          </div>
-          <div class="tmux-agent-card" data-agent="bash" style="--agent-accent:#64748b;">
-            <div class="tmux-agent-icon">{{ICO:code:18}}</div>
-            <div class="tmux-agent-name">bash</div>
-            <div class="tmux-agent-desc">{{T:tmux_agent_bash_desc}}</div>
+          <div class="nt-agent" data-agent="pi" role="button" tabindex="0">
+            <span class="nt-agent-name">pi</span>
+            <span class="nt-agent-desc">{{T:nt_agent_pi}}</span>
           </div>
         </div>
-      </div>
-      <div class="tmux-form-group">
-        <label class="tmux-form-label">{{T:tmux_new_cwd_label}}</label>
-        <div class="tmux-cwd-chips" id="tmux-new-cwd-chips">
-          <span class="chip active" data-path="/home/tetsuya/development/svc-dashboard">svc-dashboard</span>
-          <span class="chip" data-path="/home/tetsuya/development/Mir3-Research">Mir3-Research</span>
-          <span class="chip" data-path="/home/tetsuya/dotfiles">dotfiles</span>
-          <span class="chip" data-path="/home/tetsuya">Home (~)</span>
-        </div>
-        <input type="text" class="tmux-form-input" id="tmux-new-cwd-input" value="/home/tetsuya/development/svc-dashboard" spellcheck="false" autocomplete="off" />
-      </div>
-      <div class="tmux-form-group">
-        <label class="tmux-form-label">{{T:tmux_new_prompt_label}} <small class="ghint">{{T:tmux_new_prompt_hint}}</small></label>
-        <textarea class="tmux-form-textarea" id="tmux-new-prompt-input" rows="2" placeholder="{{T:tmux_new_prompt_ph}}"></textarea>
-      </div>
-      <div class="tmux-form-group">
-        <label class="tmux-form-label">{{T:tmux_new_sname_label}} <small class="ghint">{{T:tmux_new_sname_hint}}</small></label>
-        <input type="text" class="tmux-form-input" id="tmux-new-name-input" placeholder="agent-..." spellcheck="false" autocomplete="off" />
-      </div>
+        <div class="nt-side-label">{{T:nt_host}}</div>
+        <div class="nt-hosts" id="nt-host-chips"></div>
+        <div class="nt-note">{{T:nt_repo_note}}</div>
+      </aside>
+      <section class="nt-main">
+        <input type="text" class="tmux-form-input nt-title-input" id="nt-title"
+               placeholder="{{T:nt_title_ph}}" maxlength="160" autocomplete="off" />
+        <textarea class="tmux-form-textarea nt-body-input" id="nt-body"
+                  placeholder="{{T:nt_body_ph}}"></textarea>
+      </section>
     </div>
     <div class="tmux-new-footer">
       <button type="button" class="btn-ts-action" id="btn-tmux-new-cancel">{{T:m_cancel}}</button>
       <button type="button" class="btn-ts-action btn-tmux-primary" id="btn-tmux-new-submit">
-        {{ICO:play:14}} <span>{{T:tmux_new_launch}}</span>
+        {{ICO:play:14}} <span>{{T:nt_create}}</span>
       </button>
     </div>
   </div>

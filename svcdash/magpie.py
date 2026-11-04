@@ -11,6 +11,7 @@
 import json
 import os
 import re
+import subprocess
 import threading
 import time
 import urllib.request
@@ -45,7 +46,25 @@ def _discover_magpie_key():
         _cached_key_time = now
         return k
 
-    # 2. 从 systemd user unit 文件读取
+    # 2. 从 Magpie 用户服务的运行进程读取。dashboard 以 root 运行，
+    # HOME 下的 unit 文件权限为 0600；按精确进程名读取服务环境，避免
+    # 读取或输出 unit 内容，也不把密钥复制到 dashboard 配置。
+    try:
+        out = subprocess.check_output(["pgrep", "-x", "magpie"], timeout=1).decode().strip().split()
+        for pid in out:
+            env_file = f"/proc/{pid}/environ"
+            if os.path.isfile(env_file):
+                with open(env_file, "rb") as f:
+                    for item in f.read().split(b"\0"):
+                        if item.startswith(b"MAGPIE_WEB_KEY="):
+                            value = item.split(b"=", 1)[1].decode("utf-8", "ignore").strip()
+                            if value:
+                                _cached_key = value
+                                _cached_key_time = now
+                                return value
+    except Exception:
+        pass
+
     svc_paths = [
         f"{HOME}/.config/systemd/user/magpie-web.service",
         os.path.expanduser("~/.config/systemd/user/magpie-web.service"),
@@ -62,22 +81,6 @@ def _discover_magpie_key():
                             return _cached_key
             except Exception:
                 pass
-
-    # 3. 从运行中进程的 /proc/<pid>/environ 读取
-    try:
-        import subprocess
-        out = subprocess.check_output(["pgrep", "-f", "magpie web"], timeout=1).decode().strip().split()
-        for pid in out:
-            env_file = f"/proc/{pid}/environ"
-            if os.path.isfile(env_file):
-                with open(env_file, "rb") as f:
-                    for item in f.read().split(b"\0"):
-                        if item.startswith(b"MAGPIE_WEB_KEY="):
-                            _cached_key = item.split(b"=", 1)[1].decode("utf-8", "ignore").strip()
-                            _cached_key_time = now
-                            return _cached_key
-    except Exception:
-        pass
 
     return ""
 
@@ -400,7 +403,7 @@ def sanitize_magpie_usage_for_public(usage_data: dict, lang: str = "zh") -> dict
     return clean
 
 
-_groups_cache = (0, [], [])
+_groups_cache = (0, [], [], [], [])
 _hist_cache = (0, [])
 
 def get_magpie_routing(force=False):
@@ -435,7 +438,7 @@ def get_magpie_routing(force=False):
                 pass
 
         # 3. 抓取 groups (路由组配置与池, 60s 缓存)
-        p_ts, groups_list, pools_list = _groups_cache
+        p_ts, groups_list, pools_list, models_list, deciders_list = _groups_cache
         if force or not groups_list or (now - p_ts > 60):
             try:
                 req_groups = urllib.request.Request(f"{MAGPIE_URL}/api/groups", headers=headers)
@@ -443,7 +446,9 @@ def get_magpie_routing(force=False):
                     gdata = json.loads(resp.read().decode("utf-8", "ignore"))
                     groups_list = gdata.get("groups", [])
                     pools_list = gdata.get("pools", [])
-                    _groups_cache = (now, groups_list, pools_list)
+                    models_list = gdata.get("models", [])
+                    deciders_list = gdata.get("deciders", [])
+                    _groups_cache = (now, groups_list, pools_list, models_list, deciders_list)
             except Exception:
                 pass
 
@@ -456,6 +461,8 @@ def get_magpie_routing(force=False):
             "days": days_list,
             "groups": groups_list,
             "pools": pools_list,
+            "models": models_list,
+            "deciders": deciders_list,
             "fetched_at": now
         }
         with _cache_lock:
@@ -584,6 +591,9 @@ def sanitize_magpie_providers_for_public(providers_data: dict, lang: str = "zh")
             continue
         p.pop("proxy", None)
         p.pop("authHeader", None)
+        # Magpie's newer provider schema stores a credential identifier (and
+        # sometimes its secret) under accessKey; the public UI does not use it.
+        p.pop("accessKey", None)
         acc = p.get("account")
         if isinstance(acc, dict):
             if acc.get("user"):
@@ -591,6 +601,16 @@ def sanitize_magpie_providers_for_public(providers_data: dict, lang: str = "zh")
             for l in acc.get("logins") or []:
                 if isinstance(l, dict) and l.get("user"):
                     l["user"] = acc_red
+        key_obj = p.get("key")
+        if isinstance(key_obj, dict):
+            key_obj["masked"] = "••••••"
+            if key_obj.get("id"):
+                key_obj["id"] = "key"
+        for k in p.get("keyList") or []:
+            if isinstance(k, dict):
+                k["masked"] = "••••••"
+                if k.get("id"):
+                    k["id"] = "key"
 
     return clean
 
